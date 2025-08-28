@@ -27,7 +27,7 @@ SELECT plan(
 
 SELECT is(
   (SELECT count(*)::int FROM kinds)
-  , 8
+  , 10 
   , 'Verify count from kinds'
 );
 

@@ -72,7 +72,7 @@ SELECT is(
 );
 SELECT is(
   (SELECT count(*)::int FROM obj_type)
-  , 51
+  , 53
   , 'sanity check size of pg_temp.obj_type'
 );
 

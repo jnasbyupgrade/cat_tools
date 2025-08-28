@@ -283,6 +283,8 @@ CREATE TYPE cat_tools.relation_type AS ENUM(
   , 'materialized view'
   , 'composite type'
   , 'foreign table'
+  , 'partitioned table'
+  , 'partitioned index'
 );
 COMMENT ON TYPE cat_tools.relation_type IS $$Types of objects stored in `pg_class`$$;
 
@@ -295,6 +297,8 @@ CREATE TYPE cat_tools.relation_relkind AS ENUM(
   , 'c'
   , 'f'
   , 'm'
+  , 'p'
+  , 'I'
 );
 COMMENT ON TYPE cat_tools.relation_relkind IS $$Valid values for `pg_class.relkind`$$;
 
@@ -310,6 +314,8 @@ CREATE TYPE cat_tools.object_type AS ENUM(
   , 'materialized view'
   , 'composite type'
   , 'foreign table'
+  , 'partitioned table'
+  , 'partitioned index'
   /*
    * NOTE! These are a bit weird because columns live in pg_attribute, but
    * address stuff recognizes columns as part of pg_class with a subobjid <> 0!
@@ -471,6 +477,8 @@ SELECT (
     , 'materialized view'
     , 'composite type'
     , 'foreign table'
+    , 'partitioned table'
+    , 'partitioned index'
       ]::cat_tools.object_type[] )
     THEN 'pg_class'
     WHEN object_type = ANY( '{domain constraint,table constraint}'::cat_tools.object_type[] )
@@ -655,6 +663,8 @@ SELECT CASE relkind
   WHEN 'c' THEN 'materialized view'
   WHEN 'f' THEN 'composite type'
   WHEN 'm' THEN 'foreign table'
+  WHEN 'p' THEN 'partitioned table'
+  WHEN 'I' THEN 'partitioned index'
 END::cat_tools.relation_type
 $body$
   , 'cat_tools__usage'
@@ -675,6 +685,8 @@ SELECT CASE kind
   WHEN 'materialized view' THEN 'c'
   WHEN 'composite type' THEN 'f'
   WHEN 'foreign table' THEN 'm'
+  WHEN 'partitioned table' THEN 'p'
+  WHEN 'partitioned index' THEN 'I'
 END::cat_tools.relation_relkind
 $body$
   , 'cat_tools__usage'
