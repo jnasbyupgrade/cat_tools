@@ -1217,6 +1217,34 @@ $body$
 @generated@
 
 SELECT __cat_tools.create_function(
+  'cat_tools.relation__is_temp'
+  , 'relation pg_catalog.regclass'
+  , $$boolean LANGUAGE sql STRICT STABLE$$
+  , $body$
+SELECT relnamespace::pg_catalog.regnamespace::text ~ '^pg_temp'
+FROM pg_catalog.pg_class 
+WHERE oid = $1
+$body$
+  , 'cat_tools__usage'
+  , $$Returns true if the relation is a temporary table (lives in a schema that starts with 'pg_temp').$$
+);
+
+SELECT __cat_tools.create_function(
+  'cat_tools.relation__is_catalog'
+  , 'relation pg_catalog.regclass'
+  , $$boolean LANGUAGE sql STRICT STABLE$$
+  , $body$
+SELECT relnamespace::pg_catalog.regnamespace::text = 'pg_catalog'
+FROM pg_catalog.pg_class 
+WHERE oid = $1
+$body$
+  , 'cat_tools__usage'
+  , 'Returns true if the relation is in the pg_catalog schema.'
+);
+
+@generated@
+
+SELECT __cat_tools.create_function(
   'cat_tools.name__check'
   , 'name_to_check text'
   , $$void LANGUAGE plpgsql$$

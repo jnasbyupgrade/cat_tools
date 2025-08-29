@@ -1,0 +1,8 @@
+\set ECHO none
+1..5
+ok 1 - Verify public has no perms
+ok 2 - pg_catalog.pg_class is in pg_catalog schema
+ok 3 - Create temp table for testing
+ok 4 - temp relation is not in pg_catalog schema
+ok 5 - NULL input returns NULL (STRICT function)
+# TRANSACTION INTENTIONALLY LEFT OPEN!
