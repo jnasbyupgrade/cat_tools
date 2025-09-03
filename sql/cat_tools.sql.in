@@ -1242,6 +1242,21 @@ $body$
   , 'Returns true if the relation is in the pg_catalog schema.'
 );
 
+SELECT __cat_tools.create_function(
+  'cat_tools.relation__column_names'
+  , 'relation pg_catalog.regclass'
+  , $$text[] LANGUAGE sql STRICT STABLE$$
+  , $body$
+SELECT array_agg(quote_ident(attname) ORDER BY attnum)
+FROM pg_catalog.pg_attribute
+WHERE attrelid = $1
+  AND attnum > 0
+  AND NOT attisdropped
+$body$
+  , 'cat_tools__usage'
+  , 'Returns an array of quoted column names for a relation in ordinal position order.'
+);
+
 @generated@
 
 SELECT __cat_tools.create_function(
