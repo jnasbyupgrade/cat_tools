@@ -76,7 +76,7 @@ REVOKE ALL ON _cat_tools.pg_class_v FROM public;
  * function that we're about to create to create the real version of this
  * function.
  */
-CREATE FUNCTION cat_tools.function__arg_types_text(text
+CREATE FUNCTION cat_tools.routine__parse_arg_types_text(text
 ) RETURNS text LANGUAGE sql AS 'SELECT $1';
 
 CREATE FUNCTION __cat_tools.create_function(
@@ -88,7 +88,7 @@ CREATE FUNCTION __cat_tools.create_function(
   , comment text DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql AS $body$
 DECLARE
-  c_simple_args CONSTANT text := cat_tools.function__arg_types_text(args);
+  c_simple_args CONSTANT text := cat_tools.routine__parse_arg_types_text(args);
 
   create_template CONSTANT text := $template$
 CREATE OR REPLACE FUNCTION %s(
@@ -257,13 +257,13 @@ GRANT EXECUTE ON FUNCTION _cat_tools.function__drop_temp(pg_catalog.regprocedure
 @generated@
 
 SELECT __cat_tools.create_function(
-  'cat_tools.function__arg_types'
+  'cat_tools.routine__parse_arg_types'
   , $$arguments text$$
   , $$pg_catalog.regtype[] LANGUAGE plpgsql$$
   , $body$
 DECLARE
   input_arg_types pg_catalog.regtype[];
-  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_types', 'cat_tools.function__arg_types');
+  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_types', 'cat_tools.routine__parse_arg_types');
 BEGIN
   SELECT INTO STRICT input_arg_types
       -- This is here to re-cast the array as 1-based instead of 0 based (better solutions welcome!)
@@ -272,7 +272,7 @@ BEGIN
     WHERE oid = c_temp_proc::pg_catalog.regproc;
 
   -- Clean up the temporary function
-  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.function__arg_types');
+  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.routine__parse_arg_types');
 
   RETURN input_arg_types;
 END
@@ -286,13 +286,13 @@ $body$
 @generated@
 
 SELECT __cat_tools.create_function(
-  'cat_tools.function__arg_names'
+  'cat_tools.routine__parse_arg_names'
   , $$arguments text$$
   , $$text[] LANGUAGE plpgsql$$
   , $body$
 DECLARE
   input_arg_names text[];
-  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_names', 'cat_tools.function__arg_names');
+  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_names', 'cat_tools.routine__parse_arg_names');
 BEGIN
   -- Get argument names, filtering for IN/INOUT/VARIADIC only
   SELECT INTO input_arg_names
@@ -319,25 +319,25 @@ BEGIN
   WHERE oid = c_temp_proc::pg_catalog.regproc;
 
   -- Clean up the temporary function
-  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.function__arg_names');
+  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.routine__parse_arg_names');
 
   RETURN input_arg_names;
 END
 $body$
   , 'cat_tools__usage'
   , 'Returns argument names for a function argument body as an array. Only
-  includes IN, INOUT, and VARIADIC arguments (matching function__arg_types
+  includes IN, INOUT, and VARIADIC arguments (matching routine__parse_arg_types
   behavior). Unnamed arguments appear as NULL in the result array.'
 );
 
 @generated@
 
 SELECT __cat_tools.create_function(
-  'cat_tools.function__arg_types_text'
+  'cat_tools.routine__parse_arg_types_text'
   , $$arguments text$$
   , $$text LANGUAGE sql$$
   , $body$
-SELECT array_to_string(cat_tools.function__arg_types($1), ', ')
+SELECT array_to_string(cat_tools.routine__parse_arg_types($1), ', ')
 $body$
   , 'cat_tools__usage'
   , 'Returns argument types for a function argument body as text. Unlike a
@@ -349,17 +349,56 @@ $body$
 @generated@
 
 SELECT __cat_tools.create_function(
-  'cat_tools.function__arg_names_text'
+  'cat_tools.routine__parse_arg_names_text'
   , $$arguments text$$
   , $$text LANGUAGE sql$$
   , $body$
-SELECT array_to_string(cat_tools.function__arg_names($1), ', ')
+SELECT array_to_string(cat_tools.routine__parse_arg_names($1), ', ')
 $body$
   , 'cat_tools__usage'
   , 'Returns argument names for a function argument body as text. Only
-  includes IN, INOUT, and VARIADIC arguments (matching function__arg_types_text
+  includes IN, INOUT, and VARIADIC arguments (matching routine__parse_arg_types_text
   behavior). Unnamed arguments appear as empty strings in the result.'
 
+);
+
+@generated@
+
+-- Deprecated wrapper functions for backwards compatibility
+SELECT __cat_tools.create_function(
+  'cat_tools.function__arg_types'
+  , $$arguments text$$
+  , $$pg_catalog.regtype[] LANGUAGE plpgsql$$
+  , $body$
+BEGIN
+  RAISE WARNING 'function__arg_types() is deprecated, use routine__parse_arg_types instead';
+
+  RETURN cat_tools.routine__parse_arg_types(arguments);
+END
+$body$
+  , 'cat_tools__usage'
+  , 'DEPRECATED: Use routine__parse_arg_types instead.
+  Returns argument types for a function argument body as regtype[]. Only
+  includes IN, INOUT, and VARIADIC arguments.'
+);
+
+@generated@
+
+SELECT __cat_tools.create_function(
+  'cat_tools.function__arg_types_text'
+  , $$arguments text$$
+  , $$text LANGUAGE plpgsql$$
+  , $body$
+BEGIN
+  RAISE WARNING 'function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead';
+
+  RETURN cat_tools.routine__parse_arg_types_text(arguments);
+END
+$body$
+  , 'cat_tools__usage'
+  , 'DEPRECATED: Use routine__parse_arg_types_text instead.
+  Returns argument types for a function argument body as text. Only
+  includes IN, INOUT, and VARIADIC arguments.'
 );
 
 @generated@
@@ -374,7 +413,7 @@ SELECT __cat_tools.create_function(
 SELECT format(
   '%s(%s)'
   , $1
-  , cat_tools.function__arg_types_text($2)
+  , cat_tools.routine__parse_arg_types_text($2)
 )::pg_catalog.regprocedure
 $body$
   , 'cat_tools__usage'

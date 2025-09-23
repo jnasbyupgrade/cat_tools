@@ -1,11 +1,35 @@
 \set ECHO none
-1..8
+1..24
 ok 1 - Verify public has no perms
 ok 2 - Verify public has no perms
-ok 3 - Verify function__arg_types() with INOUT and OUT
-ok 4 - Verify function__arg_types() with just INOUT
-ok 5 - Verify function__arg_types() with just OUT
-ok 6 - Verify function__arg_types() with only inputs
-ok 7 - Create pg_temp.test_function(anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[])
-ok 8 - Verify regprocedure()
+ok 3 - Verify public has no perms
+ok 4 - Security check should prevent execution when current_user != session_user
+ok 5 - Verify routine__parse_arg_types() with INOUT and OUT
+ok 6 - Verify routine__parse_arg_types() with just INOUT
+ok 7 - Verify routine__parse_arg_types() with just OUT
+ok 8 - Verify routine__parse_arg_types() with only inputs
+ok 9 - Verify routine__parse_arg_names() with INOUT and OUT
+ok 10 - Verify routine__parse_arg_names() with just INOUT
+ok 11 - Verify routine__parse_arg_names() with just OUT
+ok 12 - Verify routine__parse_arg_names() with only inputs
+ok 13 - Create pg_temp.test_function(anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[])
+ok 14 - Verify regprocedure()
+WARNING:  01000: function__arg_types() is deprecated, use routine__parse_arg_types instead
+LOCATION:  exec_stmt_raise, pl_exec.c:3879
+ok 15 - Verify function__arg_types() with INOUT and OUT
+WARNING:  01000: function__arg_types() is deprecated, use routine__parse_arg_types instead
+LOCATION:  exec_stmt_raise, pl_exec.c:3879
+ok 16 - Verify function__arg_types() with simple args
+WARNING:  01000: function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
+LOCATION:  exec_stmt_raise, pl_exec.c:3879
+ok 17 - Verify function__arg_types_text() with INOUT and OUT
+WARNING:  01000: function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
+LOCATION:  exec_stmt_raise, pl_exec.c:3879
+ok 18 - Verify function__arg_types_text() with simple args
+ok 19 - Function _cat_tools.function__arg_to_regprocedure(text, text, text) should not be security definer
+ok 20 - Function _cat_tools.function__drop_temp(regprocedure, text) should not be security definer
+ok 21 - Function cat_tools.routine__parse_arg_types(text) should not be security definer
+ok 22 - Function cat_tools.routine__parse_arg_names(text) should not be security definer
+ok 23 - Function cat_tools.routine__parse_arg_types_text(text) should not be security definer
+ok 24 - Function cat_tools.routine__parse_arg_names_text(text) should not be security definer
 # TRANSACTION INTENTIONALLY LEFT OPEN!
