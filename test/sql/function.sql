@@ -6,6 +6,7 @@
 CREATE TEMP VIEW func_calls AS
   SELECT * FROM (VALUES
     ('function__arg_types'::name, $$'x'$$::text)
+    , ('function__arg_names'::name, $$'x'$$::text)
     , ('regprocedure'::name, $$'x', 'x'$$)
   ) v(fname, args)
 ;
@@ -16,8 +17,11 @@ SELECT plan(
   + (SELECT count(*)::int FROM func_calls)
 
   + 4 -- function__arg_types()
+  + 4 -- function__arg_names()
 
   + 2 -- regprocedure()
+  + 6 -- security definer checks (2 helpers + 4 callers)
+  + 1 -- current_user != session_user test
 );
 
 SET LOCAL ROLE :no_use_role;
@@ -35,7 +39,24 @@ SELECT throws_ok(
   FROM func_calls
 ;
 
+/*
+ * Test that the security check works when current_user != session_user
+ * This tests what happens when functions are called from a different role context
+ */
 SET LOCAL ROLE :use_role;
+SELECT throws_ok(
+  $$SELECT cat_tools.function__arg_types('int')$$,
+  '28000',
+  'potential use of SECURITY DEFINER detected',
+  'Security check should prevent execution when current_user != session_user'
+);
+
+/*
+ * The helper functions now have security checks that prevent execution when
+ * current_user != session_user (which happens with SET LOCAL ROLE).
+ * Reset to session_user for testing the actual functionality.
+ */
+SET SESSION AUTHORIZATION :use_role;
 
 SELECT is(
   :s.function__arg_types($$IN in_int int, INOUT inout_int_array int[], OUT out_char "char", anyelement, boolean DEFAULT false$$)
@@ -61,6 +82,30 @@ SELECT is(
   , 'Verify function__arg_types() with only inputs'
 );
 
+SELECT is(
+  :s.function__arg_names($$IN in_int int, INOUT inout_int_array int[], OUT out_char "char", anyelement, boolean DEFAULT false$$)
+  , '{in_int,inout_int_array,NULL,NULL}'::text[]
+  , 'Verify function__arg_names() with INOUT and OUT'
+);
+
+SELECT is(
+  :s.function__arg_names($$IN in_int int, INOUT inout_int_array int[], anyarray, anyelement, boolean DEFAULT false$$)
+  , '{in_int,inout_int_array,NULL,NULL,NULL}'::text[]
+  , 'Verify function__arg_names() with just INOUT'
+);
+
+SELECT is(
+  :s.function__arg_names($$IN in_int int, OUT out_char "char", anyarray, anyelement, boolean DEFAULT false$$)
+  , '{in_int,NULL,NULL,NULL}'::text[]
+  , 'Verify function__arg_names() with just OUT'
+);
+
+SELECT is(
+  :s.function__arg_names($$anyelement, "char", pg_class, VARIADIC boolean[]$$)
+  , '{NULL,NULL,NULL,NULL}'::text[]
+  , 'Verify function__arg_names() with only inputs'
+);
+
 \set args 'anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[]'
 SELECT lives_ok(
   format(
@@ -75,6 +120,44 @@ SELECT is(
   , 'pg_temp.test_function'::regproc::regprocedure
   , 'Verify regprocedure()'
 );
+
+/*
+ * CRITICAL SECURITY TESTS: Helper functions must NOT be SECURITY DEFINER
+ * If they were SECURITY DEFINER, they could be exploited for SQL injection attacks
+ * since they execute dynamic SQL with elevated privileges.
+ */
+
+-- Test helper functions in _cat_tools schema
+\set f function__arg_to_regprocedure
+\set args_text 'text, text, text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer('_cat_tools', :'f', :'args'::name[]);
+
+\set f function__drop_temp
+\set args_text 'regprocedure, text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer('_cat_tools', :'f', :'args'::name[]);
+
+-- Test public functions in cat_tools schema
+\set f function__arg_types
+\set args_text 'text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer(:'s', :'f', :'args'::name[]);
+
+\set f function__arg_names
+\set args_text 'text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer(:'s', :'f', :'args'::name[]);
+
+\set f function__arg_types_text
+\set args_text 'text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer(:'s', :'f', :'args'::name[]);
+
+\set f function__arg_names_text
+\set args_text 'text'
+SELECT string_to_array(:'args_text', ', ') AS args \gset
+SELECT isnt_definer(:'s', :'f', :'args'::name[]);
 
 \i test/pgxntool/finish.sql
 

@@ -161,24 +161,40 @@ $body$;
 
 @generated@
 
-SELECT __cat_tools.create_function(
-  'cat_tools.function__arg_types'
-  , $$arguments text$$
-  , $$pg_catalog.regtype[] LANGUAGE plpgsql$$
-  , $body$
+CREATE FUNCTION _cat_tools.function__arg_to_regprocedure(
+  arguments text
+  , function_suffix text
+  , api_function_name text
+) RETURNS pg_catalog.regprocedure LANGUAGE plpgsql AS $body$
 DECLARE
-  input_arg_types pg_catalog.regtype[];
-
-  c_template CONSTANT text := $fmt$CREATE FUNCTION pg_temp.cat_tools__function__arg_types__temp_function(
+  /*
+   * Template for creating a temporary function with the user-provided argument
+   * signature. This allows us to leverage PostgreSQL's parser to validate and
+   * extract argument information without permanently creating a function.
+   * Using plpgsql language for the temp function to handle any return type.
+   */
+  c_template CONSTANT text := $fmt$CREATE FUNCTION pg_temp.cat_tools__function__%s__temp_function(
     %s
-  ) RETURNS %s LANGUAGE plpgsql AS 'BEGIN NULL; END'
+  ) RETURNS %s LANGUAGE plpgsql AS 'BEGIN RETURN; END'
   $fmt$;
 
   temp_proc pg_catalog.regprocedure;
   sql text;
 BEGIN
+  /*
+   * Security check: Ensure current_user == session_user to detect SECURITY DEFINER context
+   * This prevents SQL injection attacks through elevated privileges.
+   */
+  IF current_user != session_user THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '28000'  /* invalid_authorization_specification */
+      , MESSAGE = 'potential use of SECURITY DEFINER detected'
+      , DETAIL = format('current_user is %s, session_user is %s', current_user, session_user)
+      , HINT = 'Helper functions must not be called from SECURITY DEFINER context.';
+  END IF;
   sql := format(
     c_template
+    , function_suffix
     , arguments
     , 'void'
   );
@@ -191,6 +207,7 @@ BEGIN
     v_type := (regexp_matches( SQLERRM, 'function result type must be ([^ ]+) because of' ))[1];
     sql := format(
       c_template
+      , function_suffix
       , arguments
       , v_type
     );
@@ -203,18 +220,59 @@ BEGIN
    * only one function with this name. The cast to regprocedure is for the sake
    * of the DROP down below.
    */
-  EXECUTE $$SELECT 'pg_temp.cat_tools__function__arg_types__temp_function'::pg_catalog.regproc::pg_catalog.regprocedure$$ INTO temp_proc;
+  EXECUTE format(
+    $$SELECT 'pg_temp.cat_tools__function__%s__temp_function'::pg_catalog.regproc::pg_catalog.regprocedure$$
+    , function_suffix
+  ) INTO temp_proc;
+
+  RETURN temp_proc;
+END
+$body$;
+
+CREATE FUNCTION _cat_tools.function__drop_temp(
+  p_regprocedure pg_catalog.regprocedure
+  , api_function_name text
+) RETURNS void LANGUAGE plpgsql AS $body$
+BEGIN
+  /*
+   * Security check: Ensure current_user == session_user to detect SECURITY DEFINER context
+   * This prevents SQL injection attacks through elevated privileges.
+   */
+  IF current_user != session_user THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '28000'  /* invalid_authorization_specification */
+      , MESSAGE = 'potential use of SECURITY DEFINER detected'
+      , DETAIL = format('API function %s must not be called from a SECURITY DEFINER function', api_function_name)
+      , HINT = 'We detect SECURITY DEFINER context by comparing current_user and session_user, which can cause false positives if SET ROLE is used';
+  END IF;
+
+  EXECUTE 'DROP ROUTINE ' || p_regprocedure;
+END
+$body$;
+
+GRANT USAGE ON SCHEMA _cat_tools TO cat_tools__usage;
+GRANT EXECUTE ON FUNCTION _cat_tools.function__arg_to_regprocedure(text, text, text) TO cat_tools__usage;
+GRANT EXECUTE ON FUNCTION _cat_tools.function__drop_temp(pg_catalog.regprocedure, text) TO cat_tools__usage;
+
+@generated@
+
+SELECT __cat_tools.create_function(
+  'cat_tools.function__arg_types'
+  , $$arguments text$$
+  , $$pg_catalog.regtype[] LANGUAGE plpgsql$$
+  , $body$
+DECLARE
+  input_arg_types pg_catalog.regtype[];
+  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_types', 'cat_tools.function__arg_types');
+BEGIN
   SELECT INTO STRICT input_arg_types
       -- This is here to re-cast the array as 1-based instead of 0 based (better solutions welcome!)
       string_to_array(proargtypes::text,' ')::pg_catalog.regtype[]
     FROM pg_proc
-    WHERE oid = temp_proc
-  ;
-  -- NOTE: DROP may not accept all the argument options that CREATE does, so use temp_proc
-  EXECUTE format(
-    $fmt$DROP FUNCTION %s$fmt$
-    , temp_proc
-  );
+    WHERE oid = c_temp_proc::pg_catalog.regproc;
+
+  -- Clean up the temporary function
+  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.function__arg_types');
 
   RETURN input_arg_types;
 END
@@ -223,6 +281,53 @@ $body$
   , 'Returns argument types for a function argument body as an array. Unlike a
   normal regprocedure cast, this function accepts anything that is valid when
   defining a function.'
+);
+
+@generated@
+
+SELECT __cat_tools.create_function(
+  'cat_tools.function__arg_names'
+  , $$arguments text$$
+  , $$text[] LANGUAGE plpgsql$$
+  , $body$
+DECLARE
+  input_arg_names text[];
+  c_temp_proc CONSTANT pg_catalog.regprocedure := _cat_tools.function__arg_to_regprocedure(arguments, 'arg_names', 'cat_tools.function__arg_names');
+BEGIN
+  -- Get argument names, filtering for IN/INOUT/VARIADIC only
+  SELECT INTO input_arg_names
+    CASE
+      WHEN proargmodes IS NULL THEN
+        -- All arguments are IN mode, return all names (converting empty strings to NULL)
+        array(
+          SELECT CASE WHEN proargnames[i] = '' THEN NULL ELSE proargnames[i] END
+          FROM generate_series(1, array_length(proargnames, 1)) AS s(i)
+        )
+      ELSE
+        -- Filter names based on modes: 'i' (IN), 'b' (INOUT), 'v' (VARIADIC)
+        array(
+          SELECT
+            CASE
+              WHEN i <= array_length(proargnames, 1) AND proargnames[i] != '' THEN proargnames[i]
+              ELSE NULL
+            END
+          FROM generate_series(1, array_length(proargmodes, 1)) AS s(i)
+          WHERE proargmodes[i] IN ('i', 'b', 'v')
+        )
+    END
+  FROM pg_proc
+  WHERE oid = c_temp_proc::pg_catalog.regproc;
+
+  -- Clean up the temporary function
+  PERFORM _cat_tools.function__drop_temp(c_temp_proc, 'cat_tools.function__arg_names');
+
+  RETURN input_arg_names;
+END
+$body$
+  , 'cat_tools__usage'
+  , 'Returns argument names for a function argument body as an array. Only
+  includes IN, INOUT, and VARIADIC arguments (matching function__arg_types
+  behavior). Unnamed arguments appear as NULL in the result array.'
 );
 
 @generated@
@@ -238,6 +343,22 @@ $body$
   , 'Returns argument types for a function argument body as text. Unlike a
   normal regprocedure cast, this function accepts anything that is valid when
   defining a function.'
+
+);
+
+@generated@
+
+SELECT __cat_tools.create_function(
+  'cat_tools.function__arg_names_text'
+  , $$arguments text$$
+  , $$text LANGUAGE sql$$
+  , $body$
+SELECT array_to_string(cat_tools.function__arg_names($1), ', ')
+$body$
+  , 'cat_tools__usage'
+  , 'Returns argument names for a function argument body as text. Only
+  includes IN, INOUT, and VARIADIC arguments (matching function__arg_types_text
+  behavior). Unnamed arguments appear as empty strings in the result.'
 
 );
 
