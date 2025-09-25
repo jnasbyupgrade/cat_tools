@@ -20,6 +20,7 @@ CREATE SCHEMA __cat_tools;
 
 -- Schema already created via CREATE EXTENSION
 GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
+ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 
 @generated@
@@ -282,18 +283,26 @@ CREATE TYPE cat_tools.relation_type AS ENUM(
 COMMENT ON TYPE cat_tools.relation_type IS $$Types of objects stored in `pg_class`$$;
 
 CREATE TYPE cat_tools.relation_relkind AS ENUM(
-  'r'
-  , 'i'
-  , 'S'
-  , 't'
-  , 'v'
-  , 'c'
-  , 'f'
-  , 'm'
-  , 'p'
-  , 'I'
+  'r' -- table
+  , 'i' -- index
+  , 'S' -- sequence
+  , 't' -- toast table
+  , 'v' -- view
+  , 'c' -- composite type
+  , 'f' -- foreign table
+  , 'm' -- materialized view
+  , 'p' -- partitioned table
+  , 'I' -- partitioned index
 );
 COMMENT ON TYPE cat_tools.relation_relkind IS $$Valid values for `pg_class.relkind`$$;
+
+CREATE TYPE cat_tools.routine_prokind AS ENUM(
+  'f' -- function
+  , 'p' -- procedure
+  , 'a' -- aggregate
+  , 'w' -- window
+);
+COMMENT ON TYPE cat_tools.routine_prokind IS $$Valid values for `pg_proc.prokind`$$;
 
 CREATE TYPE cat_tools.routine_type AS ENUM(
   'function'
@@ -302,6 +311,15 @@ CREATE TYPE cat_tools.routine_type AS ENUM(
   , 'window'
 );
 COMMENT ON TYPE cat_tools.routine_type IS $$Types of routines stored in `pg_proc`$$;
+
+CREATE TYPE cat_tools.routine_proargmode AS ENUM(
+  'i' -- in
+  , 'o' -- out
+  , 'b' -- inout
+  , 'v' -- variadic
+  , 't' -- table
+);
+COMMENT ON TYPE cat_tools.routine_proargmode IS $$Valid values for `pg_proc.proargmodes` elements$$;
 
 CREATE TYPE cat_tools.routine_argument_mode AS ENUM(
   'in'
@@ -312,6 +330,13 @@ CREATE TYPE cat_tools.routine_argument_mode AS ENUM(
 );
 COMMENT ON TYPE cat_tools.routine_argument_mode IS $$Argument modes for function/procedure parameters$$;
 
+CREATE TYPE cat_tools.routine_provolatile AS ENUM(
+  'i' -- immutable
+  , 's' -- stable
+  , 'v' -- volatile
+);
+COMMENT ON TYPE cat_tools.routine_provolatile IS $$Valid values for `pg_proc.provolatile`$$;
+
 CREATE TYPE cat_tools.routine_volatility AS ENUM(
   'immutable'
   , 'stable'
@@ -319,10 +344,17 @@ CREATE TYPE cat_tools.routine_volatility AS ENUM(
 );
 COMMENT ON TYPE cat_tools.routine_volatility IS $$Volatility levels for functions/procedures$$;
 
+CREATE TYPE cat_tools.routine_proparallel AS ENUM(
+  's' -- safe
+  , 'r' -- restricted
+  , 'u' -- unsafe
+);
+COMMENT ON TYPE cat_tools.routine_proparallel IS $$Valid values for `pg_proc.proparallel`$$;
+
 CREATE TYPE cat_tools.routine_parallel_safety AS ENUM(
-  'unsafe'
+  'safe'
   , 'restricted'
-  , 'safe'
+  , 'unsafe'
 );
 COMMENT ON TYPE cat_tools.routine_parallel_safety IS $$Parallel safety levels for functions/procedures$$;
 
@@ -333,6 +365,7 @@ CREATE TYPE cat_tools.routine_argument AS (
   , argument_default text
 );
 COMMENT ON TYPE cat_tools.routine_argument IS $$Detailed information about a single function/procedure argument$$;
+
 
 -- Mapping functions
 SELECT __cat_tools.create_function(
@@ -346,9 +379,9 @@ SELECT CASE relkind
   WHEN 'S' THEN 'sequence'
   WHEN 't' THEN 'toast table'
   WHEN 'v' THEN 'view'
-  WHEN 'c' THEN 'materialized view'
-  WHEN 'f' THEN 'composite type'
-  WHEN 'm' THEN 'foreign table'
+  WHEN 'c' THEN 'materialized view' -- composite type (but mapped to materialized view)
+  WHEN 'f' THEN 'composite type' -- foreign table (but mapped to composite type)
+  WHEN 'm' THEN 'foreign table' -- materialized view (but mapped to foreign table)
   WHEN 'p' THEN 'partitioned table'
   WHEN 'I' THEN 'partitioned index'
 END::cat_tools.relation_type
@@ -368,9 +401,9 @@ SELECT CASE kind
   WHEN 'sequence' THEN 'S'
   WHEN 'toast table' THEN 't'
   WHEN 'view' THEN 'v'
-  WHEN 'materialized view' THEN 'c'
-  WHEN 'composite type' THEN 'f'
-  WHEN 'foreign table' THEN 'm'
+  WHEN 'materialized view' THEN 'c' -- materialized view (mapped from c)
+  WHEN 'composite type' THEN 'f' -- composite type (mapped from f)
+  WHEN 'foreign table' THEN 'm' -- foreign table (mapped from m)
   WHEN 'partitioned table' THEN 'p'
   WHEN 'partitioned index' THEN 'I'
 END::cat_tools.relation_relkind
@@ -399,7 +432,7 @@ SELECT __cat_tools.create_function(
 
 SELECT __cat_tools.create_function(
   'cat_tools.routine__type'
-  , 'prokind "char"'
+  , 'prokind cat_tools.routine_prokind'
   , 'cat_tools.routine_type LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
   , $body$
 SELECT CASE prokind
@@ -410,12 +443,23 @@ SELECT CASE prokind
 END::cat_tools.routine_type
 $body$
   , 'cat_tools__usage'
+  , 'Mapping from cat_tools.routine_prokind to cat_tools.routine_type'
+);
+
+SELECT __cat_tools.create_function(
+  'cat_tools.routine__type'
+  , 'prokind "char"'
+  , 'cat_tools.routine_type LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
+  , $body$
+SELECT cat_tools.routine__type(prokind::cat_tools.routine_prokind)
+$body$
+  , 'cat_tools__usage'
   , 'Mapping from pg_proc.prokind to cat_tools.routine_type'
 );
 
 SELECT __cat_tools.create_function(
   'cat_tools.routine__argument_mode'
-  , 'proargmode "char"'
+  , 'proargmode cat_tools.routine_proargmode'
   , 'cat_tools.routine_argument_mode LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
   , $body$
 SELECT CASE proargmode
@@ -427,12 +471,23 @@ SELECT CASE proargmode
 END::cat_tools.routine_argument_mode
 $body$
   , 'cat_tools__usage'
+  , 'Mapping from cat_tools.routine_proargmode to cat_tools.routine_argument_mode'
+);
+
+SELECT __cat_tools.create_function(
+  'cat_tools.routine__argument_mode'
+  , 'proargmode "char"'
+  , 'cat_tools.routine_argument_mode LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
+  , $body$
+SELECT cat_tools.routine__argument_mode(proargmode::cat_tools.routine_proargmode)
+$body$
+  , 'cat_tools__usage'
   , 'Mapping from pg_proc.proargmodes element to cat_tools.routine_argument_mode'
 );
 
 SELECT __cat_tools.create_function(
   'cat_tools.routine__volatility'
-  , 'provolatile "char"'
+  , 'provolatile cat_tools.routine_provolatile'
   , 'cat_tools.routine_volatility LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
   , $body$
 SELECT CASE provolatile
@@ -442,7 +497,33 @@ SELECT CASE provolatile
 END::cat_tools.routine_volatility
 $body$
   , 'cat_tools__usage'
+  , 'Mapping from cat_tools.routine_provolatile to cat_tools.routine_volatility'
+);
+
+SELECT __cat_tools.create_function(
+  'cat_tools.routine__volatility'
+  , 'provolatile "char"'
+  , 'cat_tools.routine_volatility LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
+  , $body$
+SELECT cat_tools.routine__volatility(provolatile::cat_tools.routine_provolatile)
+$body$
+  , 'cat_tools__usage'
   , 'Mapping from pg_proc.provolatile to cat_tools.routine_volatility'
+);
+
+SELECT __cat_tools.create_function(
+  'cat_tools.routine__parallel_safety'
+  , 'proparallel cat_tools.routine_proparallel'
+  , 'cat_tools.routine_parallel_safety LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
+  , $body$
+SELECT CASE proparallel
+  WHEN 's' THEN 'safe'
+  WHEN 'r' THEN 'restricted'
+  WHEN 'u' THEN 'unsafe'
+END::cat_tools.routine_parallel_safety
+$body$
+  , 'cat_tools__usage'
+  , 'Mapping from cat_tools.routine_proparallel to cat_tools.routine_parallel_safety'
 );
 
 SELECT __cat_tools.create_function(
@@ -450,11 +531,7 @@ SELECT __cat_tools.create_function(
   , 'proparallel "char"'
   , 'cat_tools.routine_parallel_safety LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
   , $body$
-SELECT CASE proparallel
-  WHEN 'u' THEN 'unsafe'
-  WHEN 'r' THEN 'restricted'
-  WHEN 's' THEN 'safe'
-END::cat_tools.routine_parallel_safety
+SELECT cat_tools.routine__parallel_safety(proparallel::cat_tools.routine_proparallel)
 $body$
   , 'cat_tools__usage'
   , 'Mapping from pg_proc.proparallel to cat_tools.routine_parallel_safety'
@@ -753,6 +830,7 @@ CREATE TYPE cat_tools.object_type AS ENUM(
   , 'transform' -- SED: REQUIRES 9.5!
   , 'access method' -- pg_am
 );
+
 
 @generated@
 

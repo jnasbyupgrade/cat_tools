@@ -1,0 +1,15 @@
+\set ECHO none
+1..12
+ok 1 - Verify count from parallel_safeties
+ok 2 - Simple sanity check of routine__parallel_safety()
+ok 3 - Simple sanity check of routine__parallel_safety() with enum
+ok 4 - SELECT cat_tools.routine__parallel_safety('s'::cat_tools.routine_proparallel)
+ok 5 - SELECT cat_tools.routine__parallel_safety('r'::cat_tools.routine_proparallel)
+ok 6 - SELECT cat_tools.routine__parallel_safety('u'::cat_tools.routine_proparallel)
+ok 7 - SELECT cat_tools.routine__parallel_safety('s'::"char")
+ok 8 - SELECT cat_tools.routine__parallel_safety('r'::"char")
+ok 9 - SELECT cat_tools.routine__parallel_safety('u'::"char")
+ok 10 - SELECT cat_tools.routine__parallel_safety('s')
+ok 11 - SELECT cat_tools.routine__parallel_safety('r')
+ok 12 - SELECT cat_tools.routine__parallel_safety('u')
+# TRANSACTION INTENTIONALLY LEFT OPEN!

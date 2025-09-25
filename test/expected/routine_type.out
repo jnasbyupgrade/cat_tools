@@ -1,0 +1,18 @@
+\set ECHO none
+1..15
+ok 1 - Verify count from routine_kinds
+ok 2 - Simple sanity check of routine__type()
+ok 3 - Simple sanity check of routine__type() with enum
+ok 4 - SELECT cat_tools.routine__type('f'::cat_tools.routine_prokind)
+ok 5 - SELECT cat_tools.routine__type('p'::cat_tools.routine_prokind)
+ok 6 - SELECT cat_tools.routine__type('a'::cat_tools.routine_prokind)
+ok 7 - SELECT cat_tools.routine__type('w'::cat_tools.routine_prokind)
+ok 8 - SELECT cat_tools.routine__type('f'::"char")
+ok 9 - SELECT cat_tools.routine__type('p'::"char")
+ok 10 - SELECT cat_tools.routine__type('a'::"char")
+ok 11 - SELECT cat_tools.routine__type('w'::"char")
+ok 12 - SELECT cat_tools.routine__type('f')
+ok 13 - SELECT cat_tools.routine__type('p')
+ok 14 - SELECT cat_tools.routine__type('a')
+ok 15 - SELECT cat_tools.routine__type('w')
+# TRANSACTION INTENTIONALLY LEFT OPEN!
