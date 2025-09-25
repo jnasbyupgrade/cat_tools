@@ -18,6 +18,10 @@ SELECT plan(
 
   + 4 -- routine__parse_arg_types()
   + 4 -- routine__parse_arg_names()
+  + 4 -- routine__arg_types()
+  + 4 -- routine__arg_names()
+  + 4 -- routine__arg_types_text()
+  + 4 -- routine__arg_names_text()
 
   + 2 -- regprocedure()
   + 4 -- deprecated function__arg_types() wrapper (2 more tests)
@@ -107,6 +111,7 @@ SELECT is(
   , 'Verify routine__parse_arg_names() with only inputs'
 );
 
+-- Test new routine__arg_* functions that accept regprocedure
 \set args 'anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[]'
 SELECT lives_ok(
   format(
@@ -114,6 +119,110 @@ SELECT lives_ok(
     , :'args'
   )
   , format('Create pg_temp.test_function(%s)', :'args')
+);
+
+-- Test routine__arg_types() - all argument types
+SELECT is(
+  :s.routine__arg_types(:s.regprocedure('pg_temp.test_function', :'args'))
+  , '{anyarray,pg_class,integer,boolean[]}'::regtype[]
+  , 'Verify routine__arg_types() returns all argument types'
+);
+
+-- Test routine__arg_types() with a function that has only IN arguments
+SELECT is(
+  :s.routine__arg_types('array_length(anyarray,integer)'::regprocedure)
+  , '{anyarray,integer}'::regtype[]
+  , 'Verify routine__arg_types() with IN arguments only'
+);
+
+-- Test routine__arg_types() with a function with no arguments
+SELECT is(
+  :s.routine__arg_types('pg_backend_pid()'::regprocedure)
+  , '{}'::regtype[]
+  , 'Verify routine__arg_types() with no arguments'
+);
+
+-- Test routine__arg_types() with a built-in function
+SELECT is(
+  :s.routine__arg_types('concat("any")'::regprocedure)
+  , '{"\"any\""}'::regtype[]
+  , 'Verify routine__arg_types() with VARIADIC argument'
+);
+
+-- Test routine__arg_names() - all argument names
+SELECT is(
+  :s.routine__arg_names(:s.regprocedure('pg_temp.test_function', :'args'))
+  , '{NULL,NULL,NULL,NULL}'::text[]
+  , 'Verify routine__arg_names() returns argument names (unnamed function)'
+);
+
+-- Create a function with named arguments for testing
+SELECT lives_ok(
+  $$CREATE FUNCTION pg_temp.named_function(input_val int, INOUT inout_val text, OUT output_val boolean) LANGUAGE plpgsql AS $body$BEGIN output_val := true; END$body$;$$
+  , 'Create pg_temp.named_function with named arguments'
+);
+
+SELECT is(
+  :s.routine__arg_names(:s.regprocedure('pg_temp.named_function', 'input_val int, INOUT inout_val text, OUT output_val boolean'))
+  , '{input_val,inout_val}'::text[]
+  , 'Verify routine__arg_names() with named arguments'
+);
+
+-- Test routine__arg_names() with no arguments
+SELECT is(
+  :s.routine__arg_names('pg_backend_pid()'::regprocedure)
+  , '{}'::text[]
+  , 'Verify routine__arg_names() with no arguments'
+);
+
+-- Test routine__arg_types_text() wrapper
+SELECT is(
+  :s.routine__arg_types_text(:s.regprocedure('pg_temp.test_function', :'args'))
+  , 'anyarray, pg_class, integer, boolean[]'
+  , 'Verify routine__arg_types_text() formatting'
+);
+
+SELECT is(
+  :s.routine__arg_types_text('array_length(anyarray,integer)'::regprocedure)
+  , 'anyarray, integer'
+  , 'Verify routine__arg_types_text() with simple types'
+);
+
+SELECT is(
+  :s.routine__arg_types_text('pg_backend_pid()'::regprocedure)
+  , ''
+  , 'Verify routine__arg_types_text() with no arguments'
+);
+
+SELECT is(
+  :s.routine__arg_types_text('concat("any")'::regprocedure)
+  , '"any"'
+  , 'Verify routine__arg_types_text() with VARIADIC'
+);
+
+-- Test routine__arg_names_text() wrapper
+SELECT is(
+  :s.routine__arg_names_text(:s.regprocedure('pg_temp.named_function', 'input_val int, INOUT inout_val text, OUT output_val boolean'))
+  , 'input_val, inout_val'
+  , 'Verify routine__arg_names_text() formatting'
+);
+
+SELECT is(
+  :s.routine__arg_names_text(:s.regprocedure('pg_temp.test_function', :'args'))
+  , ''
+  , 'Verify routine__arg_names_text() with unnamed arguments'
+);
+
+SELECT is(
+  :s.routine__arg_names_text('array_length(anyarray,integer)'::regprocedure)
+  , ''
+  , 'Verify routine__arg_names_text() with built-in function'
+);
+
+SELECT is(
+  :s.routine__arg_names_text('pg_backend_pid()'::regprocedure)
+  , ''
+  , 'Verify routine__arg_names_text() with no arguments'
 );
 
 SELECT is(

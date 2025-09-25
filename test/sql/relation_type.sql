@@ -33,12 +33,12 @@ SELECT is(
 
 SELECT is(
   cat_tools.relation__kind('r')
-  , 'table'::cat_tools.relation_type
+  , 'table'
   , 'Simple sanity check of relation__kind()'
 );
 SELECT is(
   cat_tools.relation__relkind('table')
-  , 'r'::cat_tools.relation_relkind
+  , 'r'
   , 'Simple sanity check of relation__relkind()'
 );
 
@@ -50,8 +50,8 @@ SELECT throws_ok(
   , 'Permission denied trying to use types'
 )
   FROM (VALUES
-    ('cat_tools.relation__relkind')
-    , ('cat_tools.relation__kind')
+    ('cat_tools.relation_relkind')
+    , ('cat_tools.relation_kind')
   ) v(typename)
 ;
 SELECT throws_ok(
@@ -61,8 +61,8 @@ SELECT throws_ok(
   , 'Permission denied trying to run functions'
 )
   FROM (VALUES
-    ('kind', 'text'::regtype)
-    , ('relkind', 'text'::regtype)
+    ('kind', 'text')
+    , ('relkind', 'text')
   ) v(suffix, argtype)
 ;
 
@@ -76,7 +76,7 @@ SELECT is(cat_tools.relation__kind(relkind)::text, kind, format('SELECT cat_tool
   FROM kinds
 ;
 
-SELECT is(cat_tools.relation__kind(relkind::"char")::text, kind, format('SELECT cat_tools.relation_type(%L::"char")', relkind))
+SELECT is(cat_tools.relation__kind(relkind)::text, kind, format('SELECT cat_tools.relation_type(%L)', relkind))
   FROM kinds
 ;
 
