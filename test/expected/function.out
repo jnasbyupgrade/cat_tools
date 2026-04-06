@@ -30,17 +30,13 @@ ok 27 - Verify routine__arg_names_text() with unnamed arguments
 ok 28 - Verify routine__arg_names_text() with built-in function
 ok 29 - Verify routine__arg_names_text() with no arguments
 ok 30 - Verify regprocedure()
-WARNING:  01000: function__arg_types() is deprecated, use routine__parse_arg_types instead
-LOCATION:  exec_stmt_raise, pl_exec.c:3879
+WARNING:  function__arg_types() is deprecated, use routine__parse_arg_types instead
 ok 31 - Verify function__arg_types() with INOUT and OUT
-WARNING:  01000: function__arg_types() is deprecated, use routine__parse_arg_types instead
-LOCATION:  exec_stmt_raise, pl_exec.c:3879
+WARNING:  function__arg_types() is deprecated, use routine__parse_arg_types instead
 ok 32 - Verify function__arg_types() with simple args
-WARNING:  01000: function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
-LOCATION:  exec_stmt_raise, pl_exec.c:3879
+WARNING:  function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
 ok 33 - Verify function__arg_types_text() with INOUT and OUT
-WARNING:  01000: function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
-LOCATION:  exec_stmt_raise, pl_exec.c:3879
+WARNING:  function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
 ok 34 - Verify function__arg_types_text() with simple args
 ok 35 - Function _cat_tools.function__arg_to_regprocedure(text, text, text) should not be security definer
 ok 36 - Function _cat_tools.function__drop_temp(regprocedure, text) should not be security definer

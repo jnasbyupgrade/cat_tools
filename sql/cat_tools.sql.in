@@ -446,16 +446,10 @@ $body$
   , 'Mapping from cat_tools.routine_prokind to cat_tools.routine_type'
 );
 
-SELECT __cat_tools.create_function(
-  'cat_tools.routine__type'
-  , 'prokind "char"'
-  , 'cat_tools.routine_type LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
-  , $body$
-SELECT cat_tools.routine__type(prokind::cat_tools.routine_prokind)
-$body$
-  , 'cat_tools__usage'
-  , 'Mapping from pg_proc.prokind to cat_tools.routine_type'
-);
+CREATE CAST ("char" AS cat_tools.routine_prokind)    WITH INOUT AS IMPLICIT;
+CREATE CAST ("char" AS cat_tools.routine_proargmode)  WITH INOUT AS IMPLICIT;
+CREATE CAST ("char" AS cat_tools.routine_provolatile) WITH INOUT AS IMPLICIT;
+CREATE CAST ("char" AS cat_tools.routine_proparallel) WITH INOUT AS IMPLICIT;
 
 SELECT __cat_tools.create_function(
   'cat_tools.routine__argument_mode'
@@ -475,17 +469,6 @@ $body$
 );
 
 SELECT __cat_tools.create_function(
-  'cat_tools.routine__argument_mode'
-  , 'proargmode "char"'
-  , 'cat_tools.routine_argument_mode LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
-  , $body$
-SELECT cat_tools.routine__argument_mode(proargmode::cat_tools.routine_proargmode)
-$body$
-  , 'cat_tools__usage'
-  , 'Mapping from pg_proc.proargmodes element to cat_tools.routine_argument_mode'
-);
-
-SELECT __cat_tools.create_function(
   'cat_tools.routine__volatility'
   , 'provolatile cat_tools.routine_provolatile'
   , 'cat_tools.routine_volatility LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
@@ -501,17 +484,6 @@ $body$
 );
 
 SELECT __cat_tools.create_function(
-  'cat_tools.routine__volatility'
-  , 'provolatile "char"'
-  , 'cat_tools.routine_volatility LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
-  , $body$
-SELECT cat_tools.routine__volatility(provolatile::cat_tools.routine_provolatile)
-$body$
-  , 'cat_tools__usage'
-  , 'Mapping from pg_proc.provolatile to cat_tools.routine_volatility'
-);
-
-SELECT __cat_tools.create_function(
   'cat_tools.routine__parallel_safety'
   , 'proparallel cat_tools.routine_proparallel'
   , 'cat_tools.routine_parallel_safety LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
@@ -524,17 +496,6 @@ END::cat_tools.routine_parallel_safety
 $body$
   , 'cat_tools__usage'
   , 'Mapping from cat_tools.routine_proparallel to cat_tools.routine_parallel_safety'
-);
-
-SELECT __cat_tools.create_function(
-  'cat_tools.routine__parallel_safety'
-  , 'proparallel "char"'
-  , 'cat_tools.routine_parallel_safety LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE'
-  , $body$
-SELECT cat_tools.routine__parallel_safety(proparallel::cat_tools.routine_proparallel)
-$body$
-  , 'cat_tools__usage'
-  , 'Mapping from pg_proc.proparallel to cat_tools.routine_parallel_safety'
 );
 
 @generated@
@@ -1814,14 +1775,15 @@ BEGIN
   RAISE DEBUG 'v_work "%"', v_work;
 
   -- Get function arguments
-  IF current_setting('server_version')::real >= 11.0 THEN
-    v_execute_clause := ' EXECUTE FUNCTION ' || r_trigger.tgfoid::pg_catalog.regproc || E'\\(';
-  ELSE
-    v_execute_clause := ' EXECUTE PROCEDURE ' || r_trigger.tgfoid::pg_catalog.regproc || E'\\(';
-  END IF;
+  -- Use a generic pattern rather than the regproc name, since pg_get_triggerdef
+  -- may render temp functions as "pg_temp.f" while ::regproc gives "pg_temp_N.f".
+  v_execute_clause := E' EXECUTE (FUNCTION|PROCEDURE) \\S+\\(';
   v_array := regexp_split_to_array( v_work, v_execute_clause );
   EXECUTE format(
-      'SELECT array[ %s ]'
+      CASE WHEN coalesce( rtrim( v_array[2], ')' ), '' ) = ''
+        THEN 'SELECT ARRAY[]::text[]'
+        ELSE 'SELECT array[ %s ]'
+      END
       , rtrim( v_array[2], ')' ) -- Yank trailing )
     )
     INTO function_arguments

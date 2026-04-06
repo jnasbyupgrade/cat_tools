@@ -232,6 +232,7 @@ SELECT is(
 );
 
 -- Test deprecated wrapper functions still work
+\set VERBOSITY terse
 SELECT is(
   :s.function__arg_types($$IN in_int int, INOUT inout_int_array int[], OUT out_char "char", anyelement, boolean DEFAULT false$$)
   , '{int,int[],anyelement,boolean}'::regtype[]
