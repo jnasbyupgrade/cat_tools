@@ -5,7 +5,12 @@ SET client_min_messages = WARNING;
 -- Note: pgTap is loaded by setup.sql
 --CREATE EXTENSION IF NOT EXISTS ...;
 
-\i test/.build/active.sql
+/*
+ * Now load our extension. We don't use IF NOT EXISTS here because we want an
+ * error if the extension is already loaded (because we want to ensure we're
+ * getting the very latest version).
+ */
+CREATE EXTENSION cat_tools;
 
 -- Used by several unit tests
 \set no_use_role cat_tools_testing__no_use_role
