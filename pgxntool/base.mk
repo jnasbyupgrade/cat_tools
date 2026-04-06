@@ -65,6 +65,7 @@ TEST__SOURCE__EXPECTED_FILES = $(patsubst $(TESTDIR)/output/%.source,$(TESTDIR)/
 REGRESS		 = $(sort $(notdir $(subst .source,,$(TEST_FILES:.sql=)))) # Sort is to get unique list
 REGRESS_OPTS = --inputdir=$(TESTDIR) --outputdir=$(TESTOUT) # See additional setup below
 
+
 # Generate unique database name for tests to prevent conflicts across projects
 # Uses project name + first 5 chars of md5 hash of current directory
 # This prevents multiple test runs in different directories from clobbering each other
