@@ -11,7 +11,7 @@ SELECT current_setting('server_version_num')::int >= 120000 AS pg12plus \gset
 
 \if :pg12plus
 BEGIN;
-CREATE EXTENSION cat_tools;
+CREATE EXTENSION cat_tools VERSION '0.3.0';
 -- Suppress the "version already installed" notice from the no-op UPDATE.
 -- (SET LOCAL client_min_messages inside the install script is scoped to that
 -- script and reverts when it returns, so we must set it again here.)
