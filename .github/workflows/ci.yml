@@ -13,5 +13,7 @@ jobs:
         run: pg-start ${{ matrix.pg }}
       - name: Check out the repo
         uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: make test PGUSER=postgres
