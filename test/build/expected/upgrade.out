@@ -1,0 +1,2 @@
+\set ECHO none
+Skipping upgrade-from-0.2.1: install script incompatible with PG12+ (duplicate oid in catalog views)
