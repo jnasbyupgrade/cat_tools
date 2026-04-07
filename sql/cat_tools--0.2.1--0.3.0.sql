@@ -733,7 +733,8 @@ REVOKE ALL ON _cat_tools.column FROM public;
 
 -- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1169
 -- Recreate pg_extension_v with omit_column to handle PG12+ oid visibility.
-DROP VIEW IF EXISTS cat_tools.pg_extension_v;
+-- CASCADE is required: pg_extension__get(name) depends on pg_extension_v's row type.
+DROP VIEW IF EXISTS cat_tools.pg_extension_v CASCADE;
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
   SELECT e.oid
@@ -747,6 +748,30 @@ $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_extension')
 ));
 GRANT SELECT ON cat_tools.pg_extension_v TO cat_tools__usage;
+
+-- Recreate pg_extension__get (dropped by the CASCADE above).
+SELECT __cat_tools.create_function(
+  'cat_tools.pg_extension__get'
+  , 'extension_name name'
+  , $$cat_tools.pg_extension_v LANGUAGE plpgsql$$
+  , $body$
+DECLARE
+  r cat_tools.pg_extension_v;
+BEGIN
+  SELECT INTO STRICT r
+      *
+    FROM cat_tools.pg_extension_v
+    WHERE extname = extension_name
+  ;
+  RETURN r;
+EXCEPTION WHEN no_data_found THEN
+  RAISE 'extension "%" does not exist', extension_name
+    USING ERRCODE = 'undefined_object'
+  ;
+END
+$body$
+  , 'cat_tools__usage'
+);
 
 -- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1185
 CREATE OR REPLACE VIEW cat_tools.column AS

@@ -24,11 +24,26 @@ GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 
 -- No permissions checks
-CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
-  SELECT c.oid AS reloid, c.*, n.nspname AS relschema
-    FROM pg_class c
-      LEFT JOIN pg_namespace n ON( n.oid = c.relnamespace )
-;
+-- Dynamically build the SELECT list to handle PG12+ oid visibility (pg_class.oid
+-- became a regular visible column in PG12, causing SELECT c.* to include a
+-- duplicate oid when combined with the explicit c.oid AS reloid).
+DO $$
+BEGIN
+  EXECUTE format($fmt$
+    CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
+      SELECT c.oid AS reloid
+          , %s
+          , n.nspname AS relschema
+        FROM pg_class c
+          LEFT JOIN pg_namespace n ON( n.oid = c.relnamespace )
+    $fmt$,
+    (SELECT string_agg('c.' || attname, ', ' ORDER BY attnum)
+     FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_class'::regclass
+       AND NOT attisdropped AND attnum > 0 AND attname != 'oid')
+  );
+END
+$$;
 REVOKE ALL ON _cat_tools.pg_class_v FROM public;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
@@ -718,15 +733,36 @@ GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
-CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
-  SELECT a.*
-      , c.*
-      , t.oid AS typoid
-      , t.*
-    FROM pg_attribute a
-      LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
-      LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
-;
+-- Dynamically build the SELECT list to:
+-- 1. Exclude attmissingval (added in PG11, pseudo-type anyarray not allowed in views).
+-- 2. Exclude oid from pg_type (t.oid already captured as typoid), which prevents a
+--    duplicate oid when _cat_tools.column joins this view with pg_constraint (which
+--    gained a visible oid column in PG12+).
+DO $$
+BEGIN
+  EXECUTE format($fmt$
+    CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
+      SELECT %s
+          , c.*
+          , t.oid AS typoid
+          , %s
+        FROM pg_attribute a
+          LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
+          LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
+    $fmt$,
+    (SELECT string_agg('a.' || attname, ', ' ORDER BY attnum)
+     FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_attribute'::regclass
+       AND NOT attisdropped AND attnum > 0
+       AND attname != 'attmissingval'),
+    (SELECT string_agg('t.' || attname, ', ' ORDER BY attnum)
+     FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_type'::regclass
+       AND NOT attisdropped AND attnum > 0
+       AND attname != 'oid')
+  );
+END
+$$;
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
 CREATE OR REPLACE VIEW _cat_tools.column AS
@@ -757,16 +793,26 @@ REVOKE ALL ON _cat_tools.column FROM public;
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
 -- No perms on extension visibility
-CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
-  SELECT e.oid, e.*
-
-      , extnamespace::regnamespace AS extschema -- SED: REQUIRES 9.5!
--- Not used prior to 9.5:       , nspname AS extschema 
-
-      , extconfig::pg_catalog.regclass[] AS ext_config_tables
-    FROM pg_catalog.pg_extension e
-      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
-;
+-- Dynamically build the SELECT list to handle PG12+ oid visibility (same issue
+-- as pg_class_v: pg_extension.oid became a regular visible column in PG12).
+DO $$
+BEGIN
+  EXECUTE format($fmt$
+    CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
+      SELECT e.oid
+          , %s
+          , extnamespace::regnamespace AS extschema
+          , extconfig::pg_catalog.regclass[] AS ext_config_tables
+        FROM pg_catalog.pg_extension e
+          LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+    $fmt$,
+    (SELECT string_agg('e.' || attname, ', ' ORDER BY attnum)
+     FROM pg_attribute
+     WHERE attrelid = 'pg_catalog.pg_extension'::regclass
+       AND NOT attisdropped AND attnum > 0 AND attname != 'oid')
+  );
+END
+$$;
 GRANT SELECT ON cat_tools.pg_extension_v TO cat_tools__usage;
 
 CREATE OR REPLACE VIEW cat_tools.column AS
