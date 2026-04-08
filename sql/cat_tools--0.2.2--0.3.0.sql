@@ -87,54 +87,11 @@ BEGIN
 END
 $body$;
 
-CREATE FUNCTION __cat_tools.omit_column(
-  rel text
-  , omit name[] DEFAULT array['oid']
-) RETURNS text LANGUAGE sql IMMUTABLE AS $body$
-SELECT array_to_string(array(
-    SELECT attname
-      FROM pg_attribute a
-      WHERE attrelid = rel::regclass
-        AND NOT attisdropped
-        AND attnum >= 0
-        AND attname != ANY( omit )
-      ORDER BY attnum
-    )
-  , ', '
-)
-$body$;
 
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L23
-ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__usage;
-
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L62
--- Recreate _cat_tools.pg_class_v with dynamic column list to handle PG12+ oid visibility.
--- WARNING: CASCADE will drop cat_tools.pg_class_v, _cat_tools.pg_attribute_v,
--- _cat_tools.column, and cat_tools.column. Any user-defined views depending on
--- cat_tools.pg_class_v or cat_tools.column must be recreated after this upgrade.
-DROP VIEW IF EXISTS _cat_tools.pg_class_v CASCADE;
-
-SELECT __cat_tools.exec(format($fmt$
-CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
-  SELECT c.oid AS reloid
-      , %s
-      , n.nspname AS relschema
-    FROM pg_class c
-      LEFT JOIN pg_namespace n ON( n.oid = c.relnamespace )
-;
-$fmt$
-  , __cat_tools.omit_column('pg_catalog.pg_class')
-));
-REVOKE ALL ON _cat_tools.pg_class_v FROM public;
-
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1109
-CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
-  SELECT *
-    FROM _cat_tools.pg_class_v
-    WHERE NOT pg_is_other_temp_schema(relnamespace)
-      AND relkind IN( 'r', 'v', 'f' )
-;
-GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
+-- NOTE: Changes already applied in 0.2.2:
+-- ALTER DEFAULT PRIVILEGES, pg_class_v fix, pg_attribute_v fix, pg_extension_v fix,
+-- pg_extension__get recreation, cat_tools.column recreation are all skipped here.
+-- They are part of the 0.2.1→0.2.2 upgrade.
 
 -- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L165
 CREATE FUNCTION _cat_tools.function__arg_to_regprocedure(
@@ -688,106 +645,7 @@ $body$
   , 'Returns catalog table that is used to store <object_type> objects'
 );
 
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1122
--- Recreate pg_attribute_v (dropped via pg_class_v CASCADE above) with omit_column
--- to exclude attmissingval (added in PG11, causes issues with SELECT *).
-SELECT __cat_tools.exec(format($fmt$
-CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
-  SELECT %s
-      , c.*
-      , t.oid AS typoid
-      , %s
-    FROM pg_attribute a
-      LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
-      LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
-;
-$fmt$
-  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
-  , __cat_tools.omit_column('pg_catalog.pg_type')
-));
-REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1140
-CREATE OR REPLACE VIEW _cat_tools.column AS
-  SELECT *
-    , pg_catalog.format_type(typoid, atttypmod) AS column_type
-    , CASE typtype
-        WHEN 'd' THEN pg_catalog.format_type(typbasetype, typtypmod)
-        WHEN 'e' THEN 'text'
-        ELSE pg_catalog.format_type(typoid, atttypmod)
-      END AS base_type
-    , pk.conkey AS pk_columns
-    , ARRAY[attnum] <@ pk.conkey AS is_pk_member
-    , (SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid)
-          FROM pg_catalog.pg_attrdef d
-          WHERE d.adrelid = a.attrelid
-            AND d.adnum = a.attnum
-            AND a.atthasdef
-        ) AS column_default
-    FROM _cat_tools.pg_attribute_v a
-      LEFT JOIN pg_constraint pk
-        ON ( reloid = pk.conrelid )
-          AND pk.contype = 'p'
-;
-REVOKE ALL ON _cat_tools.column FROM public;
-
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1169
--- Recreate pg_extension_v with omit_column to handle PG12+ oid visibility.
--- CASCADE is required: pg_extension__get(name) depends on pg_extension_v's row type.
-DROP VIEW IF EXISTS cat_tools.pg_extension_v CASCADE;
-SELECT __cat_tools.exec(format($fmt$
-CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
-  SELECT e.oid
-      , %s
-      , extnamespace::regnamespace AS extschema
-      , extconfig::pg_catalog.regclass[] AS ext_config_tables
-    FROM pg_catalog.pg_extension e
-      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
-;
-$fmt$
-  , __cat_tools.omit_column('pg_catalog.pg_extension')
-));
-GRANT SELECT ON cat_tools.pg_extension_v TO cat_tools__usage;
-
--- Recreate pg_extension__get (dropped by the CASCADE above).
-SELECT __cat_tools.create_function(
-  'cat_tools.pg_extension__get'
-  , 'extension_name name'
-  , $$cat_tools.pg_extension_v LANGUAGE plpgsql$$
-  , $body$
-DECLARE
-  r cat_tools.pg_extension_v;
-BEGIN
-  SELECT INTO STRICT r
-      *
-    FROM cat_tools.pg_extension_v
-    WHERE extname = extension_name
-  ;
-  RETURN r;
-EXCEPTION WHEN no_data_found THEN
-  RAISE 'extension "%" does not exist', extension_name
-    USING ERRCODE = 'undefined_object'
-  ;
-END
-$body$
-  , 'cat_tools__usage'
-);
-
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1185
-CREATE OR REPLACE VIEW cat_tools.column AS
-  SELECT *
-    FROM _cat_tools.column
-    WHERE NOT pg_is_other_temp_schema(relnamespace)
-      AND attnum > 0
-      AND NOT attisdropped
-      AND relkind IN( 'r', 'v', 'f' )
-      AND (
-        pg_has_role(SESSION_USER, relowner, 'USAGE'::text)
-        OR has_column_privilege(SESSION_USER, reloid, attnum, 'SELECT, INSERT, UPDATE, REFERENCES'::text)
-      )
-    ORDER BY relschema, relname, attnum
-;
-GRANT SELECT ON cat_tools.column TO cat_tools__usage;
 
 -- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1202
 SELECT __cat_tools.create_function(
@@ -975,11 +833,7 @@ $body$
   , 'Provide details about a trigger.'
 );
 
--- https://github.com/jnasbyupgrade/cat_tools/blob/new_functions/sql/cat_tools.sql.in#L1919
-DROP FUNCTION __cat_tools.omit_column(
-  rel text
-  , omit name[] -- DEFAULT array['oid']
-);
+
 DROP FUNCTION __cat_tools.exec(
   sql text
 );

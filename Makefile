@@ -19,6 +19,7 @@ EXTRA_CLEAN += $B/cat_tools.sql $(versioned_out)
 
 # Install historical version scripts so the upgrade test can start from them
 DATA += sql/cat_tools--0.2.1.sql
+DATA += sql/cat_tools--0.2.2.sql
 
 # TODO: refactor the version stuff into a function
 #
