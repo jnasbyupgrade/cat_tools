@@ -3,6 +3,7 @@ B = sql
 testdeps: $(wildcard test/*.sql test/helpers/*.sql) # Be careful not to include directories in this
 
 include pgxntool/base.mk
+include control.mk
 
 LT95		 = $(call test, $(MAJORVER), -lt, 95)
 LT93		 = $(call test, $(MAJORVER), -lt, 93)
@@ -16,6 +17,9 @@ versioned_out = $(subst sql/,$B/,$(subst .sql.in,.sql,$(versioned_in)))
 all: $B/cat_tools.sql $(versioned_out)
 installcheck: $B/cat_tools.sql $(versioned_out)
 EXTRA_CLEAN += $B/cat_tools.sql $(versioned_out)
+
+# Install historical version scripts so the upgrade test can start from them
+DATA += sql/cat_tools--0.2.1.sql
 
 # TODO: refactor the version stuff into a function
 #
