@@ -39,6 +39,18 @@ SET LOCAL ROLE :use_role;
  * pg_attribute__get()
  */
 
+-- pg_attribute.attmissingval (PG11+) is anyarray pseudo-type, which has no equality
+-- operator and can't be compared by pgTAP's results_eq. Build a column list that
+-- excludes it so the comparison works on all PG versions.
+CREATE FUNCTION pg_temp.attr_test_cols() RETURNS text LANGUAGE sql AS $$
+  SELECT string_agg(attname::text, ', ' ORDER BY attnum)
+    FROM pg_attribute
+    WHERE attrelid = 'pg_catalog.pg_attribute'::regclass
+      AND attnum > 0
+      AND NOT attisdropped
+      AND attname != 'attmissingval'
+$$;
+
 \set call 'SELECT * FROM %I.%I( %L, %L )'
 \set n pg_attribute__get
 SELECT throws_ok(
@@ -64,20 +76,30 @@ SELECT throws_ok(
 
 SELECT results_eq(
   format(
-    :'call', :'s', :'n'
+    $$SELECT %s FROM %I.%I(%L, %L)$$
+    , pg_temp.attr_test_cols()
+    , :'s', :'n'
     , 'pg_catalog.pg_class'
     , 'relname'
   )
-  , $$SELECT * FROM pg_attribute WHERE attrelid = 'pg_class'::regclass AND attname='relname'$$
+  , format(
+    $$SELECT %s FROM pg_attribute WHERE attrelid = 'pg_class'::regclass AND attname='relname'$$
+    , pg_temp.attr_test_cols()
+  )
   , 'Verify details of pg_class.relname'
 );
 SELECT results_eq(
   format(
-    :'call', :'s', :'n'
+    $$SELECT %s FROM %I.%I(%L, %L)$$
+    , pg_temp.attr_test_cols()
+    , :'s', :'n'
     , 'pg_catalog.pg_tables'
     , 'tablename'
   )
-  , $$SELECT * FROM pg_attribute WHERE attrelid = 'pg_tables'::regclass AND attname='tablename'$$
+  , format(
+    $$SELECT %s FROM pg_attribute WHERE attrelid = 'pg_tables'::regclass AND attname='tablename'$$
+    , pg_temp.attr_test_cols()
+  )
   , 'Verify details of pg_tables.tablename'
 );
 

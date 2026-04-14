@@ -24,6 +24,10 @@ results/
 regression.diffs
 regression.out
 
+# Claude Code settings — track everything except local overrides
+.claude/*.local.json
+
 # Misc
 tmp/
 .DS_Store
+.claude/worktrees/
