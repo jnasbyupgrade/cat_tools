@@ -106,10 +106,12 @@ $body$;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__usage;
 
--- Recreate _cat_tools.pg_class_v with dynamic column list to handle PG12+ oid visibility.
--- WARNING: CASCADE will drop cat_tools.pg_class_v, _cat_tools.pg_attribute_v,
--- _cat_tools.column, and cat_tools.column. Any user-defined views depending on
--- cat_tools.pg_class_v or cat_tools.column must be recreated after this upgrade.
+/*
+ * Recreate _cat_tools.pg_class_v with dynamic column list to handle PG12+ oid visibility.
+ * WARNING: CASCADE will drop cat_tools.pg_class_v, _cat_tools.pg_attribute_v,
+ * _cat_tools.column, and cat_tools.column. Any user-defined views depending on
+ * cat_tools.pg_class_v or cat_tools.column must be recreated after this upgrade.
+ */
 DROP VIEW IF EXISTS _cat_tools.pg_class_v CASCADE;
 
 SELECT __cat_tools.exec(format($fmt$
