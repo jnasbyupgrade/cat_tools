@@ -135,13 +135,16 @@ CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
 ;
 GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
--- Recreate pg_attribute_v (dropped via pg_class_v CASCADE above).
--- On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
--- We include it cast to text[] so the column is preserved; on PG10 it doesn't exist.
+/*
+ * Recreate pg_attribute_v (dropped via pg_class_v CASCADE above).
+ * On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
+ * Always include it as text[] — NULL on PG10 (column absent), real value on PG11+.
+ * This ensures consistent view schema across all PG versions.
+ */
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
   SELECT %s
-      %s
+      , %s AS attmissingval
       , c.*
       , t.oid AS typoid
       , %s
@@ -153,9 +156,11 @@ $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
   , CASE WHEN EXISTS(
       SELECT 1 FROM pg_catalog.pg_attribute
-       WHERE attrelid = 'pg_catalog.pg_attribute'::regclass
+       WHERE attrelid = 1249  -- OID of pg_catalog.pg_attribute, always 1249
          AND attname = 'attmissingval'
-    ) THEN ', a.attmissingval::text::text[]' ELSE '' END
+    ) THEN 'a.attmissingval::text::text[]'
+      ELSE 'NULL::text[]'
+    END
   , __cat_tools.omit_column('pg_catalog.pg_type')
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
