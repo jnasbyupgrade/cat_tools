@@ -15,8 +15,8 @@ SELECT current_setting('server_version_num')::int >= 110000 AS pg11plus \gset
 -- PG11+: 0.2.2 installs cleanly, test the real upgrade to current.
 BEGIN;
 CREATE EXTENSION cat_tools VERSION '0.2.2';
--- Suppress expected notices from the upgrade.
-SET LOCAL client_min_messages = WARNING;
+-- Suppress expected deprecation warnings from the upgrade.
+SET LOCAL client_min_messages = ERROR;
 ALTER EXTENSION cat_tools UPDATE;
 ROLLBACK;
 \else
