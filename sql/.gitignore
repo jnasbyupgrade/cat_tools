@@ -1,1 +1,4 @@
+# cat_tools.sql is generated from cat_tools.sql.in by `make` and should not be committed.
+# Version-specific install/upgrade scripts (cat_tools--X.Y.Z.sql, cat_tools--X--Y.sql)
+# ARE committed and tracked in git — see the parent .gitignore for details.
 cat_tools.sql

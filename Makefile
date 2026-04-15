@@ -11,15 +11,14 @@ LT93		 = $(call test, $(MAJORVER), -lt, 93)
 $B:
 	@mkdir -p $@
 
-versioned_in = $(wildcard sql/*--*--*.sql.in)
-versioned_out = $(subst sql/,$B/,$(subst .sql.in,.sql,$(versioned_in)))
+all: $B/cat_tools.sql
+installcheck: $B/cat_tools.sql
+EXTRA_CLEAN += $B/cat_tools.sql
 
-all: $B/cat_tools.sql $(versioned_out)
-installcheck: $B/cat_tools.sql $(versioned_out)
-EXTRA_CLEAN += $B/cat_tools.sql $(versioned_out)
-
-# Install historical version scripts so the upgrade test can start from them
-DATA += sql/cat_tools--0.2.1.sql
+# Include historical install scripts (X.Y.Z only, not upgrade paths X--Y).
+# Upgrade scripts (sql/*--*--*.sql) are already picked up by pgxntool/base.mk.
+# pgxs DATA is not cleaned by `make clean` — only DATA_built is.
+DATA += $(filter-out $(EXTENSION_VERSION_FILES) $(wildcard sql/*--*--*.sql), $(wildcard sql/*--*.sql))
 
 # TODO: refactor the version stuff into a function
 #
