@@ -7,3 +7,4 @@ cat_tools.sql
 # or only pre-built SQL was published to PGXN), so they are committed as-is.
 cat_tools--0.2.0.sql
 cat_tools--0.2.1.sql
+cat_tools--0.2.1--0.2.2.sql
