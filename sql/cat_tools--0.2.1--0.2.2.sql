@@ -132,13 +132,20 @@ SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
   SELECT e.oid
       , %s
-      , extnamespace::regnamespace AS extschema
+      , %s AS extschema
       , extconfig::pg_catalog.regclass[] AS ext_config_tables
     FROM pg_catalog.pg_extension e
       LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
 ;
 $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_extension')
+  , CASE WHEN EXISTS(
+      SELECT 1 FROM pg_catalog.pg_type
+       WHERE typname = 'regnamespace'
+         AND typnamespace = 11  -- pg_catalog
+    ) THEN 'extnamespace::regnamespace'
+      ELSE 'nspname'
+    END
 ));
 GRANT SELECT ON cat_tools.pg_extension_v TO cat_tools__usage;
 
