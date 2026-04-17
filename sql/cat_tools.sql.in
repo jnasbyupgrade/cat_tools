@@ -804,7 +804,7 @@ CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
       , %s
 
       , extnamespace::regnamespace AS extschema -- SED: REQUIRES 9.5!
--- Not used prior to 9.5:       , nspname AS extschema
+      , nspname AS extschema -- SED: PRIOR TO 9.5!
 
       , extconfig::pg_catalog.regclass[] AS ext_config_tables
     FROM pg_catalog.pg_extension e
