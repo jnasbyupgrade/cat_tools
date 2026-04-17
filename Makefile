@@ -3,7 +3,6 @@ B = sql
 testdeps: $(wildcard test/*.sql test/helpers/*.sql) # Be careful not to include directories in this
 
 include pgxntool/base.mk
-include control.mk
 
 LT95		 = $(call test, $(MAJORVER), -lt, 95)
 LT93		 = $(call test, $(MAJORVER), -lt, 93)
