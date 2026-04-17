@@ -753,16 +753,17 @@ GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
   SELECT %s
-      , %s AS attmissingval
       , c.*
       , t.oid AS typoid
       , %s
+      , %s AS attmissingval
     FROM pg_attribute a
       LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
 ;
 $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
+  , __cat_tools.omit_column('pg_catalog.pg_type')
   , CASE WHEN EXISTS(
       SELECT 1 FROM pg_catalog.pg_attribute
        WHERE attrelid = 1249  -- OID of pg_catalog.pg_attribute, always 1249
@@ -770,7 +771,6 @@ $fmt$
     ) THEN 'a.attmissingval::text::text[]'
       ELSE 'NULL::text[]'
     END
-  , __cat_tools.omit_column('pg_catalog.pg_type')
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
