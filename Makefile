@@ -11,14 +11,18 @@ LT93		 = $(call test, $(MAJORVER), -lt, 93)
 $B:
 	@mkdir -p $@
 
-all: $B/cat_tools.sql
-installcheck: $B/cat_tools.sql
-EXTRA_CLEAN += $B/cat_tools.sql
+versioned_in = $(wildcard sql/*--*.sql.in)
+versioned_out = $(subst sql/,$B/,$(subst .sql.in,.sql,$(versioned_in)))
 
-# Include historical install scripts (X.Y.Z only, not upgrade paths X--Y).
-# Upgrade scripts (sql/*--*--*.sql) are already picked up by pgxntool/base.mk.
-# pgxs DATA is not cleaned by `make clean` — only DATA_built is.
-DATA += $(filter-out $(EXTENSION_VERSION_FILES) $(wildcard sql/*--*--*.sql), $(wildcard sql/*--*.sql))
+# Pre-built historical install scripts (no .sql.in source available)
+DATA += sql/cat_tools--0.1.0.sql sql/cat_tools--0.1.3.sql sql/cat_tools--0.1.4.sql sql/cat_tools--0.1.5.sql
+# Generated historical install scripts (built from .sql.in source).
+# Exclude EXTENSION_VERSION_FILES since the current version is managed by control.mk.
+DATA += $(filter-out $(EXTENSION_VERSION_FILES), $(versioned_out))
+
+all: $B/cat_tools.sql $(versioned_out)
+installcheck: $B/cat_tools.sql $(versioned_out)
+EXTRA_CLEAN += $B/cat_tools.sql $(filter-out $(EXTENSION_VERSION_FILES), $(versioned_out))
 
 # TODO: refactor the version stuff into a function
 #
