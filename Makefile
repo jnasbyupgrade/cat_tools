@@ -6,6 +6,8 @@ include pgxntool/base.mk
 
 LT95		 = $(call test, $(MAJORVER), -lt, 95)
 LT93		 = $(call test, $(MAJORVER), -lt, 93)
+LT12		 = $(call test, $(MAJORVER), -lt, 120)
+LT11		 = $(call test, $(MAJORVER), -lt, 110)
 
 $B:
 	@mkdir -p $@
@@ -44,6 +46,16 @@ ifeq ($(LT93),yes)
 	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: REQUIRES 9.3!/-- Requires 9.3: \1/'
 else
 	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: PRIOR TO 9.3!/-- Not used prior to 9.3: \1/'
+endif
+ifeq ($(LT12),yes)
+	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: REQUIRES 12!/-- Requires 12: \1/'
+else
+	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: PRIOR TO 12!/-- Not used prior to 12: \1/'
+endif
+ifeq ($(LT11),yes)
+	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: REQUIRES 11!/-- Requires 11: \1/'
+else
+	pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: PRIOR TO 11!/-- Not used prior to 11: \1/'
 endif
 	mv $@.tmp $@
 

@@ -66,7 +66,8 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
       , c.*
       , t.oid AS typoid
       , %s
-      , %s AS attmissingval
+      , a.attmissingval::text::text[] AS attmissingval -- SED: REQUIRES 11!
+      , NULL::text[] AS attmissingval -- SED: PRIOR TO 11!
     FROM pg_attribute a
       LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
@@ -74,13 +75,6 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
 $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
   , __cat_tools.omit_column('pg_catalog.pg_type')
-  , CASE WHEN EXISTS(
-      SELECT 1 FROM pg_catalog.pg_attribute
-       WHERE attrelid = 1249  -- OID of pg_catalog.pg_attribute, always 1249
-         AND attname = 'attmissingval'
-    ) THEN 'a.attmissingval::text::text[]'
-      ELSE 'NULL::text[]'
-    END
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 

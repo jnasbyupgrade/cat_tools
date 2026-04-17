@@ -747,8 +747,7 @@ GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
 /*
  * On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
- * Always include it as text[] — NULL on PG10 (column absent), real value on PG11+.
- * This ensures consistent view schema across all PG versions.
+ * Include it cast to text[] on PG11+; expose as NULL::text[] on older versions.
  */
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
@@ -756,7 +755,8 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
       , c.*
       , t.oid AS typoid
       , %s
-      , %s AS attmissingval
+      , a.attmissingval::text::text[] AS attmissingval -- SED: REQUIRES 11!
+      , NULL::text[] AS attmissingval -- SED: PRIOR TO 11!
     FROM pg_attribute a
       LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
@@ -764,13 +764,6 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
 $fmt$
   , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
   , __cat_tools.omit_column('pg_catalog.pg_type')
-  , CASE WHEN EXISTS(
-      SELECT 1 FROM pg_catalog.pg_attribute
-       WHERE attrelid = 1249  -- OID of pg_catalog.pg_attribute, always 1249
-         AND attname = 'attmissingval'
-    ) THEN 'a.attmissingval::text::text[]'
-      ELSE 'NULL::text[]'
-    END
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
