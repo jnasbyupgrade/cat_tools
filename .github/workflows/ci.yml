@@ -50,27 +50,13 @@ jobs:
         run: make test PGUSER=postgres
       - name: Install PostgreSQL ${{ matrix.new_pg }}
         run: apt-get install -y postgresql-${{ matrix.new_pg }}
-      - name: Create new cluster for upgrade
-        run: pg_createcluster --port 5433 ${{ matrix.new_pg }} upgrade
-      - name: Stop old cluster
-        run: pg_ctlcluster ${{ matrix.old_pg }} test stop
-      - name: Run pg_upgrade to ${{ matrix.new_pg }}
-        run: |
-          /usr/lib/postgresql/${{ matrix.new_pg }}/bin/pg_upgrade \
-            -U postgres \
-            -b /usr/lib/postgresql/${{ matrix.old_pg }}/bin \
-            -B /usr/lib/postgresql/${{ matrix.new_pg }}/bin \
-            -d /var/lib/postgresql/${{ matrix.old_pg }}/test \
-            -D /var/lib/postgresql/${{ matrix.new_pg }}/upgrade \
-            -o '-c config_file=/etc/postgresql/${{ matrix.old_pg }}/test/postgresql.conf' \
-            -O '-c config_file=/etc/postgresql/${{ matrix.new_pg }}/upgrade/postgresql.conf'
-      - name: Start new cluster
-        run: pg_ctlcluster ${{ matrix.new_pg }} upgrade start
+      - name: Upgrade cluster to PostgreSQL ${{ matrix.new_pg }}
+        run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
       - name: Verify extension version after upgrade
         run: |
-          psql -p 5433 -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+          psql -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
       - name: Run test suite on new cluster
-        run: PGPORT=5433 make test PGUSER=postgres
+        run: make test PGUSER=postgres
 
   extension-update-test:
     strategy:
