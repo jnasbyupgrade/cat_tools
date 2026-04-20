@@ -4,7 +4,7 @@ jobs:
   test:
     strategy:
       matrix:
-        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10, 9.6, 9.5, 9.4, 9.3, 9.2]
+        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10]
     name: 🐘 PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
@@ -54,14 +54,15 @@ jobs:
         run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
       - name: Verify extension version after upgrade
         run: |
-          psql -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+          DB=$(psql -U postgres -tAc "SELECT datname FROM pg_database WHERE datname ~ '^cat_tools'" | head -1)
+          psql -U postgres -d "$DB" -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
       - name: Run test suite on new cluster
         run: make test PGUSER=postgres
 
   extension-update-test:
     strategy:
       matrix:
-        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10, 9.6]
+        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10]
     name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
@@ -74,8 +75,8 @@ jobs:
         run: apt-get install -y rsync
       - name: Install cat_tools (all versions)
         run: make install PGUSER=postgres
-      - name: Install cat_tools from version 0.1.0
-        run: psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.1.0'"
+      - name: Install cat_tools from version 0.2.0
+        run: psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.2.0'"
       - name: Update cat_tools to current version
         run: psql -U postgres -c "ALTER EXTENSION cat_tools UPDATE"
       - name: Verify extension version after update

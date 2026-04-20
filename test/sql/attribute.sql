@@ -47,7 +47,7 @@ SET LOCAL ROLE :use_role;
  */
 CREATE FUNCTION pg_temp.attr_test_cols() RETURNS text LANGUAGE sql AS $$
   SELECT string_agg(
-      CASE WHEN attname = 'attmissingval' THEN 'attmissingval::text[]'
+      CASE WHEN attname = 'attmissingval' THEN 'attmissingval::text::text[]'
            ELSE attname::text
       END
       , ', ' ORDER BY attnum)
