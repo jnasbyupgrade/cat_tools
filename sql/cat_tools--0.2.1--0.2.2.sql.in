@@ -80,9 +80,16 @@ $fmt$
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
--- Refresh _cat_tools.column and cat_tools.column to pick up the new attmissingval column.
+/*
+ * Rebuild _cat_tools.column using omit_column() on _cat_tools.pg_attribute_v so that
+ * attmissingval is appended AFTER the pre-existing computed columns. This is required
+ * for CREATE OR REPLACE VIEW to succeed: PostgreSQL only allows adding new columns at
+ * the end. The plain SELECT * approach would insert attmissingval before column_type,
+ * shifting existing column positions and causing "cannot change name of view column".
+ */
+SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.column AS
-  SELECT *
+  SELECT %s
     , pg_catalog.format_type(typoid, atttypmod) AS column_type
     , CASE typtype
         WHEN 'd' THEN pg_catalog.format_type(typbasetype, typtypmod)
@@ -97,11 +104,15 @@ CREATE OR REPLACE VIEW _cat_tools.column AS
             AND d.adnum = a.attnum
             AND a.atthasdef
         ) AS column_default
+    , a.attmissingval
     FROM _cat_tools.pg_attribute_v a
       LEFT JOIN pg_constraint pk
         ON ( reloid = pk.conrelid )
           AND pk.contype = 'p'
 ;
+$fmt$
+  , __cat_tools.omit_column('_cat_tools.pg_attribute_v', array['attmissingval'])
+));
 REVOKE ALL ON _cat_tools.column FROM public;
 
 CREATE OR REPLACE VIEW cat_tools.column AS
