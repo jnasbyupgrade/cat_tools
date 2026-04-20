@@ -88,7 +88,7 @@ $body$;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.in.sql
 
--- schema cat_tools is created by PostgreSQL via the control file's schema directive
+CREATE SCHEMA cat_tools;
 GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 

@@ -1,4 +1,4 @@
--- schema cat_tools is created by PostgreSQL via the control file's schema directive
+CREATE SCHEMA cat_tools;
 CREATE SCHEMA _cat_tools;
 
 CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
