@@ -49,7 +49,7 @@ jobs:
       - name: Test cat_tools on old cluster
         run: make test PGUSER=postgres
       - name: Install PostgreSQL ${{ matrix.new_pg }}
-        run: apt-get install -y postgresql-${{ matrix.new_pg }}
+        run: apt-get install -y postgresql-${{ matrix.new_pg }} postgresql-server-dev-${{ matrix.new_pg }}
       - name: Upgrade cluster to PostgreSQL ${{ matrix.new_pg }}
         run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
       - name: Verify extension version after upgrade
