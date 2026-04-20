@@ -6,6 +6,17 @@
 
 **Always open PRs against the main repo** (`Postgres-Extensions/cat_tools`), not a fork.
 
+## CI: extension-update-test matrix
+
+The `extension-update-test` job in `.github/workflows/ci.yml` is currently restricted to
+`pg: [11, 10]` because those are the only PostgreSQL versions where a pre-0.2.2 install
+script (`cat_tools--0.2.0.sql`) installs cleanly. PG 12+ exposed the `oid` system column
+in `SELECT *`, breaking `0.2.0` and `0.2.1` with "column oid specified more than once".
+
+**When working on a new version:** review and expand this matrix. The new version's install
+script may support more PG versions, enabling testing of the upgrade path from older
+cat_tools versions on newer PostgreSQL.
+
 ## Code Style
 
 ### Comments

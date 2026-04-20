@@ -50,6 +50,8 @@ jobs:
         run: make test PGUSER=postgres
       - name: Install PostgreSQL ${{ matrix.new_pg }}
         run: apt-get install -y postgresql-${{ matrix.new_pg }} postgresql-server-dev-${{ matrix.new_pg }}
+      - name: Install cat_tools into new cluster
+        run: make install PGUSER=postgres PG_CONFIG=/usr/lib/postgresql/${{ matrix.new_pg }}/bin/pg_config
       - name: Upgrade cluster to PostgreSQL ${{ matrix.new_pg }}
         run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
       - name: Verify extension version after upgrade
@@ -62,7 +64,7 @@ jobs:
   extension-update-test:
     strategy:
       matrix:
-        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10]
+        pg: [11, 10]
     name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
