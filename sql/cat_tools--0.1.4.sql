@@ -80,7 +80,7 @@ BEGIN
 END
 $body$;
 
-CREATE SCHEMA cat_tools;
+-- schema cat_tools is created by PostgreSQL via the control file's schema directive
 GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 
