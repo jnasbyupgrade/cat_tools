@@ -55,10 +55,8 @@ CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
 GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
 /*
- * Recreate _cat_tools.pg_attribute_v to handle PG11+ attmissingval.
- * attmissingval is appended at the end so CREATE OR REPLACE VIEW can add it
- * without invalidating dependent views — no DROP CASCADE needed.
- * On PG < 11 (where attmissingval doesn't exist) it is exposed as NULL::text[].
+ * On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
+ * Include it cast to text[] on PG11+; expose as NULL::text[] on older versions.
  */
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
@@ -73,7 +71,11 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
 ;
 $fmt$
-  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
+  /*
+   * attmissingval is explicitly included above (cast to text[] via SED markers).
+   * Omit it here so it doesn't appear twice, and omit oid to avoid conflicts on PG12+.
+   */
+  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['oid', 'attmissingval'])
   , __cat_tools.omit_column('pg_catalog.pg_type')
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
