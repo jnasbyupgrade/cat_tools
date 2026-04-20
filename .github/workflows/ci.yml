@@ -17,3 +17,83 @@ jobs:
         run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: make test PGUSER=postgres
+
+  pg-upgrade-test:
+    strategy:
+      matrix:
+        include:
+          - old_pg: "10"
+            new_pg: "11"
+          - old_pg: "10"
+            new_pg: "18"
+          - old_pg: "11"
+            new_pg: "12"
+          - old_pg: "11"
+            new_pg: "18"
+          - old_pg: "12"
+            new_pg: "13"
+          - old_pg: "12"
+            new_pg: "18"
+    name: 🔄 pg_upgrade ${{ matrix.old_pg }} → ${{ matrix.new_pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - name: Start PostgreSQL ${{ matrix.old_pg }}
+        run: pg-start ${{ matrix.old_pg }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
+      - name: Install cat_tools into old cluster
+        run: make install PGUSER=postgres
+      - name: Test cat_tools on old cluster
+        run: make test PGUSER=postgres
+      - name: Install PostgreSQL ${{ matrix.new_pg }}
+        run: apt-get install -y postgresql-${{ matrix.new_pg }}
+      - name: Create new cluster for upgrade
+        run: pg_createcluster --port 5433 ${{ matrix.new_pg }} upgrade
+      - name: Stop old cluster
+        run: pg_ctlcluster ${{ matrix.old_pg }} test stop
+      - name: Run pg_upgrade to ${{ matrix.new_pg }}
+        run: |
+          /usr/lib/postgresql/${{ matrix.new_pg }}/bin/pg_upgrade \
+            -U postgres \
+            -b /usr/lib/postgresql/${{ matrix.old_pg }}/bin \
+            -B /usr/lib/postgresql/${{ matrix.new_pg }}/bin \
+            -d /var/lib/postgresql/${{ matrix.old_pg }}/test \
+            -D /var/lib/postgresql/${{ matrix.new_pg }}/upgrade \
+            -o '-c config_file=/etc/postgresql/${{ matrix.old_pg }}/test/postgresql.conf' \
+            -O '-c config_file=/etc/postgresql/${{ matrix.new_pg }}/upgrade/postgresql.conf'
+      - name: Start new cluster
+        run: pg_ctlcluster ${{ matrix.new_pg }} upgrade start
+      - name: Verify extension version after upgrade
+        run: |
+          psql -p 5433 -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+      - name: Run test suite on new cluster
+        run: PGPORT=5433 make test PGUSER=postgres
+
+  extension-update-test:
+    strategy:
+      matrix:
+        pg: [18, 17, 16, 15, 14, 13, 12, 11, 10, 9.6]
+    name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - name: Start PostgreSQL ${{ matrix.pg }}
+        run: pg-start ${{ matrix.pg }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
+      - name: Install cat_tools (all versions)
+        run: make install PGUSER=postgres
+      - name: Install cat_tools from version 0.1.0
+        run: psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.1.0'"
+      - name: Update cat_tools to current version
+        run: psql -U postgres -c "ALTER EXTENSION cat_tools UPDATE"
+      - name: Verify extension version after update
+        run: |
+          psql -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+      - name: Run test suite on updated extension
+        run: make test PGUSER=postgres
