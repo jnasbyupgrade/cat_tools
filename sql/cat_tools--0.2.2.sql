@@ -1,3 +1,4 @@
+/* DO NOT EDIT - AUTO-GENERATED FILE */
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
