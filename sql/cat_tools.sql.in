@@ -762,7 +762,11 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
 ;
 $fmt$
-  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['attmissingval'])
+  /*
+   * attmissingval is explicitly included above (cast to text[] via SED markers).
+   * Omit it here so it doesn't appear twice, and omit oid to avoid conflicts on PG12+.
+   */
+  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['oid', 'attmissingval'])
   , __cat_tools.omit_column('pg_catalog.pg_type')
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;

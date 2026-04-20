@@ -22,15 +22,8 @@ CREATE SCHEMA __cat_tools;
 
 -- Schema already created via CREATE EXTENSION
 GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
+ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
-
--- No permissions checks
-CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
-  SELECT c.oid AS reloid, c.*, n.nspname AS relschema
-    FROM pg_class c
-      LEFT JOIN pg_namespace n ON( n.oid = c.relnamespace )
-;
-REVOKE ALL ON _cat_tools.pg_class_v FROM public;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
@@ -43,7 +36,42 @@ BEGIN
 END
 $body$;
 
+-- See also test/setup.sql
+CREATE FUNCTION __cat_tools.omit_column(
+  rel text
+  , omit name[] DEFAULT array['oid']
+) RETURNS text LANGUAGE sql IMMUTABLE AS $body$
+SELECT array_to_string(array(
+    SELECT attname
+      FROM pg_attribute a
+      WHERE attrelid = rel::regclass
+        AND NOT attisdropped
+        AND attnum >= 0
+        AND attname != ANY( omit )
+      ORDER BY attnum
+    )
+  , ', '
+)
+$body$;
+
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+
+/*
+ * Starting in PG12 oid columns in catalog tables are no longer hidden, so we
+ * need a way to include all the fields in a table *except* for the OID column.
+ */
+SELECT __cat_tools.exec(format($fmt$
+CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
+  SELECT c.oid AS reloid
+      , %s
+      , n.nspname AS relschema
+    FROM pg_class c
+      LEFT JOIN pg_namespace n ON( n.oid = c.relnamespace )
+;
+$fmt$
+  , __cat_tools.omit_column('pg_catalog.pg_class')
+));
+REVOKE ALL ON _cat_tools.pg_class_v FROM public;
 
 /*
  * Temporary stub function. We do this so we can use the nice create_function
@@ -719,15 +747,30 @@ GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
+/*
+ * On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
+ * Include it cast to text[] on PG11+; expose as NULL::text[] on older versions.
+ */
+SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
-  SELECT a.*
+  SELECT %s
       , c.*
       , t.oid AS typoid
-      , t.*
+      , %s
+      , a.attmissingval::text::text[] AS attmissingval -- SED: REQUIRES 11!
+-- Not used prior to 11:       , NULL::text[] AS attmissingval 
     FROM pg_attribute a
       LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
 ;
+$fmt$
+  /*
+   * attmissingval is explicitly included above (cast to text[] via SED markers).
+   * Omit it here so it doesn't appear twice, and omit oid to avoid conflicts on PG12+.
+   */
+  , __cat_tools.omit_column('pg_catalog.pg_attribute', array['oid', 'attmissingval'])
+  , __cat_tools.omit_column('pg_catalog.pg_type')
+));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
 CREATE OR REPLACE VIEW _cat_tools.column AS
@@ -757,9 +800,14 @@ REVOKE ALL ON _cat_tools.column FROM public;
 
 -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
 
--- No perms on extension visibility
+/*
+ * Starting in PG12, oid became a visible column in system catalogs.
+ * Use omit_column to avoid duplicate oid columns.
+ */
+SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
-  SELECT e.oid, e.*
+  SELECT e.oid
+      , %s
 
       , extnamespace::regnamespace AS extschema -- SED: REQUIRES 9.5!
 -- Not used prior to 9.5:       , nspname AS extschema 
@@ -768,6 +816,9 @@ CREATE OR REPLACE VIEW cat_tools.pg_extension_v AS
     FROM pg_catalog.pg_extension e
       LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
 ;
+$fmt$
+  , __cat_tools.omit_column('pg_catalog.pg_extension')
+));
 GRANT SELECT ON cat_tools.pg_extension_v TO cat_tools__usage;
 
 CREATE OR REPLACE VIEW cat_tools.column AS
@@ -1320,12 +1371,16 @@ BEGIN
   RAISE DEBUG 'v_work "%"', v_work;
 
   -- Get function arguments
-  v_execute_clause := ' EXECUTE PROCEDURE ' || r_trigger.tgfoid::pg_catalog.regproc || E'\\(';
+  -- PG11+ uses "EXECUTE FUNCTION"; older versions use "EXECUTE PROCEDURE".
+  -- Note: ::regproc returns the internal pg_temp_N schema name while pg_get_triggerdef
+  -- uses the pg_temp alias, so we match on EXECUTE PROCEDURE/FUNCTION + any non-space
+  -- chars (the function name) rather than the specific function name.
+  v_execute_clause := E' EXECUTE (?:PROCEDURE|FUNCTION) \\S+\\(';
   v_array := regexp_split_to_array( v_work, v_execute_clause );
-  EXECUTE format(
-      'SELECT array[ %s ]'
-      , rtrim( v_array[2], ')' ) -- Yank trailing )
-    )
+  EXECUTE CASE
+      WHEN trim(rtrim(v_array[2], ')')) = '' THEN 'SELECT ARRAY[]::text[]'
+      ELSE format('SELECT array[ %s ]', rtrim( v_array[2], ')' ))
+    END
     INTO function_arguments
   ;
   RAISE DEBUG 'v_array[2] "%"', v_array[2];
@@ -1456,6 +1511,10 @@ CLUSTER _cat_tools.catalog_metadata USING catalog_metadata__pk_object_catalog;
 /*
  * Drop "temporary" objects
  */
+DROP FUNCTION __cat_tools.omit_column(
+  rel text
+  , omit name[]
+);
 DROP FUNCTION __cat_tools.exec(
   sql text
 );
