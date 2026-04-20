@@ -45,7 +45,7 @@ SELECT array_to_string(array(
       WHERE attrelid = rel::regclass
         AND NOT attisdropped
         AND attnum >= 0
-        AND NOT (attname = ANY( omit ))
+        AND attname != ALL( omit )
       ORDER BY attnum
     )
   , ', '
