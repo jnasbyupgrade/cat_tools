@@ -39,16 +39,22 @@ SET LOCAL ROLE :use_role;
  * pg_attribute__get()
  */
 
--- pg_attribute.attmissingval (PG11+) is anyarray pseudo-type, which has no equality
--- operator and can't be compared by pgTAP's results_eq. Build a column list that
--- excludes it so the comparison works on all PG versions.
+/*
+ * pg_attribute.attmissingval (PG11+) is anyarray pseudo-type, which has no equality
+ * operator. Build a column list that replaces it with attmissingval::text[] so the
+ * comparison works on all PG versions. On PG < 11 the column doesn't exist and is
+ * simply absent from the list.
+ */
 CREATE FUNCTION pg_temp.attr_test_cols() RETURNS text LANGUAGE sql AS $$
-  SELECT string_agg(attname::text, ', ' ORDER BY attnum)
+  SELECT string_agg(
+      CASE WHEN attname = 'attmissingval' THEN 'attmissingval::text[]'
+           ELSE attname::text
+      END
+      , ', ' ORDER BY attnum)
     FROM pg_attribute
     WHERE attrelid = 'pg_catalog.pg_attribute'::regclass
       AND attnum > 0
       AND NOT attisdropped
-      AND attname != 'attmissingval'
 $$;
 
 \set call 'SELECT * FROM %I.%I( %L, %L )'
