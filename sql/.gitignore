@@ -5,5 +5,4 @@ cat_tools--*.sql
 # Historical exceptions — no .sql.in source; must be tracked directly.
 !cat_tools--0.1.*.sql
 !cat_tools--0.2.0--0.2.1.sql
-# v0.2.2 install script — committed directly on this branch.
 !cat_tools--0.2.2.sql
