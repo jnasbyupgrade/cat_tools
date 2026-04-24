@@ -6,6 +6,18 @@
 
 **Always open PRs against the main repo** (`Postgres-Extensions/cat_tools`), not a fork.
 
+## SQL file conventions
+
+For versions 0.2.0+, `.sql.in` files are the source templates (checked in); the generated
+`.sql` files are built by `make` via awk/sed processing and are gitignored by `sql/.gitignore`.
+
+- **Check in**: all `.sql.in` files (e.g. `sql/cat_tools--0.2.2.sql.in`, upgrade scripts
+  like `sql/cat_tools--0.2.1--0.2.2.sql.in`)
+- **Do not commit**: the generated `.sql` outputs (e.g. `sql/cat_tools--0.2.2.sql`,
+  `sql/cat_tools--0.2.0--0.2.1.sql`) — covered by `sql/.gitignore`
+- **Exception**: pre-0.2.0 files (`sql/cat_tools--0.1.*.sql` and their upgrade scripts) have
+  no `.sql.in` source and must be tracked directly
+
 ## CI: extension-update-test matrix
 
 The `extension-update-test` job in `.github/workflows/ci.yml` is currently restricted to
