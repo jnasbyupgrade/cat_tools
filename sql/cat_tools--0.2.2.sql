@@ -1,6 +1,5 @@
-/* DO NOT EDIT - AUTO-GENERATED FILE */
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SET LOCAL client_min_messages = WARNING;
 
@@ -25,7 +24,7 @@ GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
 ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE FUNCTION __cat_tools.exec(
   sql text
@@ -47,14 +46,14 @@ SELECT array_to_string(array(
       WHERE attrelid = rel::regclass
         AND NOT attisdropped
         AND attnum >= 0
-        AND attname != ANY( omit )
+        AND attname != ALL( omit )
       ORDER BY attnum
     )
   , ', '
 )
 $body$;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 /*
  * Starting in PG12 oid columns in catalog tables are no longer hidden, so we
@@ -121,7 +120,7 @@ COMMENT ON FUNCTION %s(
 $template$
   ;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 BEGIN
   PERFORM __cat_tools.exec( format(
@@ -161,7 +160,7 @@ BEGIN
 END
 $body$;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.function__arg_types'
@@ -227,7 +226,7 @@ $body$
   defining a function.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.function__arg_types_text'
@@ -243,7 +242,7 @@ $body$
 
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.regprocedure'
@@ -265,7 +264,7 @@ $body$
 );
 
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE TYPE cat_tools.constraint_type AS ENUM(
   'domain constraint', 'table constraint'
@@ -300,7 +299,7 @@ CREATE TYPE cat_tools.relation_relkind AS ENUM(
 );
 COMMENT ON TYPE cat_tools.relation_relkind IS $$Valid values for `pg_class.relkind`$$;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE TYPE cat_tools.object_type AS ENUM(
   -- pg_class
@@ -363,7 +362,7 @@ CREATE TYPE cat_tools.object_type AS ENUM(
   , 'access method' -- pg_am
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.objects__shared'
@@ -406,7 +405,7 @@ $body$
   , 'Returns true if object_type is a shared object.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.objects__address_unsupported'
@@ -432,7 +431,7 @@ $body$
   , 'cat_tools__usage'
   , 'Returns set of object types not supported by pg_get_object_address().'
 );
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 SELECT __cat_tools.create_function(
   'cat_tools.object__is_address_unsupported'
   , 'object_type cat_tools.object_type'
@@ -454,7 +453,7 @@ $body$
   , 'Returns true if object type is not supported by pg_get_object_address().'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.object__catalog'
@@ -511,7 +510,7 @@ $body$
   , 'cat_tools__usage'
   , 'Returns catalog table that is used to store <object_type> objects'
 );
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 SELECT __cat_tools.create_function(
   'cat_tools.object__catalog'
   , 'object_type text'
@@ -521,7 +520,7 @@ SELECT __cat_tools.create_function(
   , 'Returns catalog table that is used to store <object_type> objects'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.object__address_classid'
@@ -546,7 +545,7 @@ SELECT __cat_tools.create_function(
   , 'Returns the classid used by the pg_*_object*() functions for an object_type'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE TABLE _cat_tools.catalog_metadata(
   object_catalog    pg_catalog.regclass
@@ -575,7 +574,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.object__reg_type'
@@ -604,7 +603,7 @@ SELECT __cat_tools.create_function(
   , 'Returns the object identifier type (ie: regclass) associated with a system catalog (ie: pg_class).'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.object__reg_type_catalog'
@@ -641,7 +640,7 @@ $body$
   , 'Returns the system catalog that stores a particular object identifier type.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.relation__kind'
@@ -683,7 +682,7 @@ $body$
   , 'Mapping from <cat_tools.relation_type> to a <pg_class.relkind> value'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.relation__relkind'
@@ -702,7 +701,7 @@ SELECT __cat_tools.create_function(
   , 'Mapping from <cat_tools.relation_type> to a <pg_class.relkind> value'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE OR REPLACE VIEW _cat_tools.pg_depend_identity_v AS -- SED: REQUIRES 9.3!
   SELECT o.type AS object_type -- SED: REQUIRES 9.3!
@@ -730,7 +729,7 @@ CREATE OR REPLACE VIEW _cat_tools.pg_depend_identity_v AS -- SED: REQUIRES 9.3!
     WHERE classid = 0 -- SED: REQUIRES 9.3!
 ; -- SED: REQUIRES 9.3!
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
   SELECT *
@@ -745,7 +744,7 @@ CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
 ;
 GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 /*
  * On PG11+, pg_attribute gained attmissingval (pseudo-type anyarray, not usable in views).
@@ -758,7 +757,7 @@ CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
       , t.oid AS typoid
       , %s
       , a.attmissingval::text::text[] AS attmissingval -- SED: REQUIRES 11!
--- Not used prior to 11:       , NULL::text[] AS attmissingval 
+-- Not used prior to 11:       , NULL::text[] AS attmissingval -- SED: PRIOR TO 11!
     FROM pg_attribute a
       LEFT JOIN _cat_tools.pg_class_v c ON ( c.reloid = a.attrelid )
       LEFT JOIN pg_type t ON ( t.oid = a.atttypid )
@@ -798,7 +797,7 @@ CREATE OR REPLACE VIEW _cat_tools.column AS
 ;
 REVOKE ALL ON _cat_tools.column FROM public;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 /*
  * Starting in PG12, oid became a visible column in system catalogs.
@@ -853,7 +852,7 @@ SELECT __cat_tools.create_function(
 $$
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 -- Borrowed from newsysviews: http://pgfoundry.org/projects/newsysviews/
 SELECT __cat_tools.create_function(
@@ -874,7 +873,7 @@ SELECT __cat_tools.create_function(
 $$
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 -- Borrowed from newsysviews: http://pgfoundry.org/projects/newsysviews/
 CREATE OR REPLACE VIEW cat_tools.pg_all_foreign_keys
@@ -895,7 +894,7 @@ AS
                                WHEN 'u' THEN 'NONE'
                                else null
          END AS match_type,
-         CASE k1.confdeltype WHEN 'a' THEN 'NO ACTION'  -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+         CASE k1.confdeltype WHEN 'a' THEN 'NO ACTION'  -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
                              WHEN 'c' THEN 'CASCADE'
                              WHEN 'd' THEN 'SET DEFAULT'
                              WHEN 'n' THEN 'SET NULL'
@@ -909,7 +908,7 @@ AS
                              WHEN 'r' THEN 'RESTRICT'
                              ELSE NULL
          END AS on_update,
-         k1.condeferrable AS is_deferrable,             -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+         k1.condeferrable AS is_deferrable,             -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
          k1.condeferred   AS is_deferred
     FROM pg_catalog.pg_constraint k1
     JOIN pg_catalog.pg_namespace n1 ON (n1.oid = k1.connamespace)
@@ -917,7 +916,7 @@ AS
     JOIN pg_catalog.pg_class c2     ON (c2.oid = k1.confrelid)
     JOIN pg_catalog.pg_namespace n2 ON (n2.oid = c2.relnamespace)
     JOIN pg_catalog.pg_depend d     ON (
-                 d.classid = 'pg_constraint'::pg_catalog.regclass  -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+                 d.classid = 'pg_constraint'::pg_catalog.regclass  -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
              AND d.objid = k1.oid
              AND d.objsubid = 0
              AND d.deptype = 'n'
@@ -926,14 +925,14 @@ AS
          )
     JOIN pg_catalog.pg_class ci ON (ci.oid = d.refobjid AND ci.relkind = 'i')
     LEFT JOIN pg_depend d2      ON (
-                 d2.classid = 'pg_class'::pg_catalog.regclass      -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+                 d2.classid = 'pg_class'::pg_catalog.regclass      -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
              AND d2.objid = ci.oid
              AND d2.objsubid = 0
              AND d2.deptype = 'i'
              AND d2.refclassid = 'pg_constraint'::pg_catalog.regclass
              AND d2.refobjsubid = 0
          )
-    LEFT JOIN pg_catalog.pg_constraint k2 ON (          -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+    LEFT JOIN pg_catalog.pg_constraint k2 ON (          -- -- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
                  k2.oid = d2.refobjid
              AND k2.contype IN ('p', 'u')
          )
@@ -944,7 +943,7 @@ AS
 ;
 GRANT SELECT ON cat_tools.pg_all_foreign_keys TO cat_tools__usage;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.pg_attribute__get'
@@ -973,7 +972,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.pg_extension__get'
@@ -1024,7 +1023,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 -- Text versions
 SELECT __cat_tools.create_function(
@@ -1057,7 +1056,7 @@ $body$
 );
 
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.get_serial_sequence'
@@ -1088,7 +1087,7 @@ $body$
   , 'Return sequence that is associated with a column. Unlike the pg_get_serial_sequence, throw an exception if there is no sequence associated with the column.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.sequence__last'
@@ -1113,7 +1112,7 @@ $$
   , 'Return the last value assigned to a column with an associated sequence.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.sequence__next'
@@ -1138,7 +1137,7 @@ $$
   , 'Return the next value to assign to a column with an associated sequence. THIS ADVANCES THE SEQUENCE.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.setval'
@@ -1178,7 +1177,7 @@ $$
   , 'Changes the value for a sequence associated with a column. next_value is the next value the sequence will assign. See also sequence__last_value.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.enum_range'
@@ -1195,7 +1194,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.enum_range_srf'
@@ -1217,7 +1216,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.name__check'
@@ -1233,7 +1232,7 @@ $body$
   , 'cat_tools__usage'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 /*
  * Trigger functions
@@ -1263,7 +1262,7 @@ $body$
   , 'Return the OID for a trigger. Returns NULL if trigger does not exist.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.trigger__get_oid'
@@ -1292,7 +1291,7 @@ $body$
   , 'Return the OID for a trigger. Throws an undefined_object error if the trigger does not exist.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.trigger__parse'
@@ -1418,7 +1417,7 @@ $body$
   , 'Provide details about a trigger.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.trigger__parse'
@@ -1452,7 +1451,7 @@ $body$
   , 'Provide details about a trigger.'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 SELECT __cat_tools.create_function(
   'cat_tools.trigger__args_as_text'
@@ -1471,7 +1470,7 @@ $body$
   , 'Convert function_arguments as returned by trigger__parse() to text (for backwards compatibility).'
 );
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 INSERT INTO _cat_tools.catalog_metadata(object_catalog, reg_type, namespace_field)
 SELECT object__catalog
@@ -1506,7 +1505,7 @@ UPDATE _cat_tools.catalog_metadata
 -- Cluster to get rid of dead rows
 CLUSTER _cat_tools.catalog_metadata USING catalog_metadata__pk_object_catalog;
 
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
 
 /*
  * Drop "temporary" objects
@@ -1529,4 +1528,4 @@ DROP FUNCTION __cat_tools.create_function(
 DROP SCHEMA __cat_tools;
 
 -- vi: expandtab ts=2 sw=2
--- GENERATED FILE! DO NOT EDIT! See sql/cat_tools.sql.in
+-- GENERATED FILE! DO NOT EDIT! See sql/cat_tools--0.2.2.sql.in
