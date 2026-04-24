@@ -48,6 +48,10 @@ jobs:
         run: make install PGUSER=postgres
       - name: Test cat_tools on old cluster
         run: make test PGUSER=postgres
+      - name: Prepare upgrade test database
+        run: |
+          createdb -U postgres cat_tools_upgrade_test
+          psql -U postgres -d cat_tools_upgrade_test -c "CREATE EXTENSION cat_tools"
       - name: Install PostgreSQL ${{ matrix.new_pg }}
         run: apt-get install -y postgresql-${{ matrix.new_pg }} postgresql-server-dev-${{ matrix.new_pg }}
       - name: Install cat_tools into new cluster
@@ -56,8 +60,9 @@ jobs:
         run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
       - name: Verify extension version after upgrade
         run: |
-          DB=$(psql -U postgres -tAc "SELECT datname FROM pg_database WHERE datname ~ '^cat_tools'" | head -1)
-          psql -U postgres -d "$DB" -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+          VERSION=$(psql -U postgres -d cat_tools_upgrade_test -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Extension version: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
       - name: Run test suite on new cluster
         run: make test PGUSER=postgres
 

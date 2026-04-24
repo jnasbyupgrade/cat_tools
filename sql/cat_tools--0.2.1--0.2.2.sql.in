@@ -81,14 +81,22 @@ $fmt$
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
 /*
+ * _cat_tools.column in 0.2.0 used an unqualified SELECT * across a LEFT JOIN
+ * with pg_constraint, which accidentally included all pg_constraint columns
+ * (conname, contype, etc.) in the view. CREATE OR REPLACE VIEW cannot drop
+ * columns, so we must drop and recreate. CASCADE handles the dependency on
+ * cat_tools.column and any user objects built on top of it.
+ */
+DROP VIEW IF EXISTS _cat_tools.column CASCADE;
+
+/*
  * Rebuild _cat_tools.column using omit_column() on _cat_tools.pg_attribute_v so that
- * attmissingval is appended AFTER the pre-existing computed columns. This is required
- * for CREATE OR REPLACE VIEW to succeed: PostgreSQL only allows adding new columns at
- * the end. The plain SELECT * approach would insert attmissingval before column_type,
- * shifting existing column positions and causing "cannot change name of view column".
+ * attmissingval is appended AFTER the pre-existing computed columns. This ensures
+ * column positions match what omit_column returns, then appends the new attmissingval
+ * at the end (PostgreSQL only allows adding new columns at the end of a view).
  */
 SELECT __cat_tools.exec(format($fmt$
-CREATE OR REPLACE VIEW _cat_tools.column AS
+CREATE VIEW _cat_tools.column AS
   SELECT %s
     , pg_catalog.format_type(typoid, atttypmod) AS column_type
     , CASE typtype
@@ -115,7 +123,7 @@ $fmt$
 ));
 REVOKE ALL ON _cat_tools.column FROM public;
 
-CREATE OR REPLACE VIEW cat_tools.column AS
+CREATE VIEW cat_tools.column AS
   SELECT *
     FROM _cat_tools.column
     WHERE NOT pg_is_other_temp_schema(relnamespace)
