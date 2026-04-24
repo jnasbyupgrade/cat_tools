@@ -8,15 +8,16 @@
 
 ## SQL file conventions
 
-For versions 0.2.0+, `.sql.in` files are the source templates (checked in); the generated
-`.sql` files are built by `make` via awk/sed processing and are gitignored by `sql/.gitignore`.
+Rules for what to track in git:
 
-- **Check in**: all `.sql.in` files (e.g. `sql/cat_tools--0.2.2.sql.in`, upgrade scripts
-  like `sql/cat_tools--0.2.1--0.2.2.sql.in`)
-- **Do not commit**: the generated `.sql` outputs (e.g. `sql/cat_tools--0.2.2.sql`,
-  `sql/cat_tools--0.2.0--0.2.1.sql`) — covered by `sql/.gitignore`
-- **Exception**: pre-0.2.0 files (`sql/cat_tools--0.1.*.sql` and their upgrade scripts) have
-  no `.sql.in` source and must be tracked directly
+0. If a `.sql.in` file exists, track the `.sql.in` and **not** the corresponding `.sql`.
+1. If no `.sql.in` exists, track the `.sql` directly (e.g. historical pre-0.2.0 files).
+2. Version-specific install scripts (e.g. `sql/cat_tools--0.2.2.sql.in`) MUST be tracked.
+3. Upgrade scripts (e.g. `sql/cat_tools--0.2.1--0.2.2.sql.in`) MUST be tracked.
+4. The current version'''s install script (e.g. `sql/cat_tools--0.2.2.sql.in`) is generated
+   by `make` from `sql/cat_tools.sql.in`, but MUST still be tracked (rule 2 applies).
+5. Version-specific files MUST NEVER be edited manually — always edit `sql/cat_tools.sql.in`
+   and regenerate.
 
 ## CI: extension-update-test matrix
 
