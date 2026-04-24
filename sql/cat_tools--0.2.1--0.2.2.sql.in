@@ -81,13 +81,19 @@ $fmt$
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
 /*
- * _cat_tools.column in 0.2.0 used an unqualified SELECT * across a LEFT JOIN
- * with pg_constraint, which accidentally included all pg_constraint columns
- * (conname, contype, etc.) in the view. CREATE OR REPLACE VIEW cannot drop
- * columns, so we must drop and recreate. CASCADE handles the dependency on
- * cat_tools.column and any user objects built on top of it.
+ * _cat_tools.column in 0.2.0 and 0.2.1 was built with an unqualified SELECT *
+ * across a LEFT JOIN with pg_constraint, which accidentally included all
+ * pg_constraint columns (conname, contype, etc.) in the view. CREATE OR
+ * REPLACE VIEW cannot drop columns, so we must drop and recreate.
+ *
+ * Drop extension-owned views in reverse dependency order so that
+ * _cat_tools.column can be dropped without CASCADE. This preserves any
+ * user-created objects that depend on cat_tools.column: if such objects exist,
+ * the DROP VIEW below will fail and the user must drop them manually first,
+ * then re-run ALTER EXTENSION cat_tools UPDATE.
  */
-DROP VIEW IF EXISTS _cat_tools.column CASCADE;
+DROP VIEW cat_tools.column;
+DROP VIEW _cat_tools.column;
 
 /*
  * Rebuild _cat_tools.column using omit_column() on _cat_tools.pg_attribute_v so that

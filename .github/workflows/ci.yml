@@ -82,12 +82,20 @@ jobs:
         run: apt-get install -y rsync
       - name: Install cat_tools (all versions)
         run: make install PGUSER=postgres
-      - name: Install cat_tools from version 0.2.0
-        run: psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.2.0'"
-      - name: Update cat_tools to current version
-        run: psql -U postgres -c "ALTER EXTENSION cat_tools UPDATE"
-      - name: Verify extension version after update
+      - name: Test upgrade from 0.2.0 (direct 0.2.0→0.2.2 path)
         run: |
-          psql -U postgres -c "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'" | grep -q "0.2.2"
+          psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.2.0'"
+          psql -U postgres -c "ALTER EXTENSION cat_tools UPDATE"
+          VERSION=$(psql -U postgres -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Version after 0.2.0 upgrade: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
+      - name: Test upgrade from 0.2.1 (0.2.1→0.2.2 path)
+        run: |
+          createdb -U postgres cat_tools_from_021
+          psql -U postgres -d cat_tools_from_021 -c "CREATE EXTENSION cat_tools VERSION '0.2.1'"
+          psql -U postgres -d cat_tools_from_021 -c "ALTER EXTENSION cat_tools UPDATE"
+          VERSION=$(psql -U postgres -d cat_tools_from_021 -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Version after 0.2.1 upgrade: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
       - name: Run test suite on updated extension
         run: make test PGUSER=postgres
