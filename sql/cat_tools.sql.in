@@ -1127,7 +1127,6 @@ GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
   SELECT %s
-      %s
       , c.*
       , t.oid AS typoid
       , %s
