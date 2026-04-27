@@ -38,6 +38,7 @@ test/install/schedule
 # Misc
 tmp/
 .DS_Store
+.claude/worktrees/
 
 # pg_tle generated files
 /pg_tle/

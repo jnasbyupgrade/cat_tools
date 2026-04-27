@@ -4,4 +4,3 @@ cat_tools.sql
 cat_tools--*.sql
 # Historical exceptions — no .sql.in source; must be tracked directly.
 !cat_tools--0.1.*.sql
-!cat_tools--0.2.0--0.2.1.sql

@@ -32,12 +32,14 @@ SELECT isnt_empty(
 SELECT bag_eq(
   $$SELECT * FROM cat_tools.pg_extension__get('cat_tools')$$
   , format(
-    $$SELECT e.*, %s, extconfig::regclass[] AS ext_config_table
+    $$SELECT %s, %s, extconfig::regclass[] AS ext_config_table
       FROM pg_extension e
         JOIN pg_namespace n ON n.oid = extnamespace
       WHERE extname = 'cat_tools'
     $$
-    , CASE WHEN pg_temp.major() < '905' THEN 'nspname AS extschema'
+    -- PG12+ includes oid in SELECT *; older versions need explicit e.oid
+    , CASE WHEN pg_temp.major() >= 1200 THEN 'e.*' ELSE 'e.oid, e.*' END
+    , CASE WHEN pg_temp.major() < 905 THEN 'nspname AS extschema'
       ELSE 'extnamespace::regnamespace AS extschema'
       END
   )
