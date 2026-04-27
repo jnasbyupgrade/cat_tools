@@ -39,9 +39,26 @@ SET LOCAL ROLE :use_role;
  * pg_attribute__get()
  */
 
+/*
+ * pg_attribute.attmissingval (PG11+) is anyarray pseudo-type, which has no equality
+ * operator. Build a column list that replaces it with attmissingval::text[] so the
+ * comparison works on all PG versions. On PG < 11 the column doesn't exist and is
+ * simply absent from the list.
+ */
+CREATE FUNCTION pg_temp.attr_test_cols() RETURNS text LANGUAGE sql AS $$
+  SELECT string_agg(
+      CASE WHEN attname = 'attmissingval' THEN 'attmissingval::text::text[]'
+           ELSE attname::text
+      END
+      , ', ' ORDER BY attnum)
+    FROM pg_attribute
+    WHERE attrelid = 'pg_catalog.pg_attribute'::regclass
+      AND attnum > 0
+      AND NOT attisdropped
+$$;
+
 \set call 'SELECT * FROM %I.%I( %L, %L )'
 \set n pg_attribute__get
-
 SELECT throws_ok(
   format(
     :'call', :'s', :'n'
@@ -63,32 +80,32 @@ SELECT throws_ok(
   , 'Non-existent column throws error'
 );
 
-/*
- * pg_attributes.attmissingval is type anyarray, which doesn't have an equality
- * operator. That breaks results_eq(), so we have to omit it from the column
- * list.
- */
-SELECT pg_temp.omit_column('pg_catalog.pg_attribute', array['attmissingval']) AS atts
-\gset
-\set get_attributes 'SELECT ' :atts ' FROM pg_attribute '
-\set call 'SELECT ' :atts ' FROM %I.%I( %L, %L )'
-
 SELECT results_eq(
   format(
-    :'call', :'s', :'n'
+    $$SELECT %s FROM %I.%I(%L, %L)$$
+    , pg_temp.attr_test_cols()
+    , :'s', :'n'
     , 'pg_catalog.pg_class'
     , 'relname'
   )
-  , :'get_attributes' || $$WHERE attrelid = 'pg_class'::regclass AND attname='relname'$$
+  , format(
+    $$SELECT %s FROM pg_attribute WHERE attrelid = 'pg_class'::regclass AND attname='relname'$$
+    , pg_temp.attr_test_cols()
+  )
   , 'Verify details of pg_class.relname'
 );
 SELECT results_eq(
   format(
-    :'call', :'s', :'n'
+    $$SELECT %s FROM %I.%I(%L, %L)$$
+    , pg_temp.attr_test_cols()
+    , :'s', :'n'
     , 'pg_catalog.pg_tables'
     , 'tablename'
   )
-  , :'get_attributes' || $$WHERE attrelid = 'pg_tables'::regclass AND attname='tablename'$$
+  , format(
+    $$SELECT %s FROM pg_attribute WHERE attrelid = 'pg_tables'::regclass AND attname='tablename'$$
+    , pg_temp.attr_test_cols()
+  )
   , 'Verify details of pg_tables.tablename'
 );
 
