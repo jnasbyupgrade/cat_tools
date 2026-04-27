@@ -17,16 +17,14 @@ upgrade_scripts_out = $(subst sql/,$B/,$(subst .sql.in,.sql,$(wildcard sql/*--*-
 
 # Pre-built historical install scripts (no .sql.in source available)
 DATA += sql/cat_tools--0.1.0.sql sql/cat_tools--0.1.3.sql sql/cat_tools--0.1.4.sql sql/cat_tools--0.1.5.sql
-# Generated historical install scripts (built from .sql.in source).
+# Generated install scripts (built from .sql.in source).
 # Exclude EXTENSION_VERSION_FILES (managed by control.mk) and upgrade scripts
 # ($(upgrade_scripts_out), already handled by base.mk) to avoid duplicates.
 DATA += $(filter-out $(EXTENSION_VERSION_FILES) $(upgrade_scripts_out), $(versioned_out))
 
 all: $B/cat_tools.sql $(versioned_out)
 installcheck: $B/cat_tools.sql $(versioned_out)
-EXTRA_CLEAN += $B/cat_tools.sql $(filter-out $(EXTENSION_VERSION_FILES), $(versioned_out))
-# Also clean the generated .sql.in for the current version
-EXTRA_CLEAN += $(EXTENSION_VERSION_FILES:.sql=.sql.in)
+EXTRA_CLEAN += $B/cat_tools.sql $(versioned_out)
 
 # Temporary ugly hack for 9.x — remove these two blocks when 9.x support is dropped.
 # $@ is deferred via = and expands to the target name at recipe time.
@@ -57,9 +55,6 @@ define _apply_version_seds
 		{print}' $@.tmp > $@.tmp2 && mv $@.tmp2 $@.tmp
 endef
 
-# Install historical version scripts so the upgrade test can start from them
-DATA += sql/cat_tools--0.2.1.sql
-DATA += sql/cat_tools--0.2.2.sql
 
 # TODO: refactor the version stuff into a function
 #
