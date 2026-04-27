@@ -69,15 +69,17 @@ jobs:
   extension-update-test:
     strategy:
       matrix:
-        # Restricted to PG10 and PG11 because the pre-0.2.2 install scripts
-        # (cat_tools--0.2.0.sql, cat_tools--0.2.1.sql) use unqualified SELECT *
-        # in views that join pg_constraint. PG12 made the `oid` system column
-        # visible in SELECT *, causing "column oid specified more than once"
-        # when those old scripts run. So we can only test upgrades from 0.2.0
-        # and 0.2.1 on PG versions where they install cleanly (PG10/11).
-        # TODO: when a future version's install script works on PG12+, expand
+        # Restricted to PG10 only because the pre-0.2.2 install scripts use
+        # unqualified SELECT * in views over pg_attribute/pg_constraint:
+        #   - PG11 added attmissingval (pseudo-type anyarray) to pg_attribute,
+        #     so cat_tools--0.2.0.sql and cat_tools--0.2.1.sql fail on PG11+
+        #     with "column attmissingval has pseudo-type anyarray".
+        #   - PG12 made the `oid` system column visible in SELECT *, causing
+        #     "column oid specified more than once" on PG12+.
+        # PG10 is the only version where both old scripts install cleanly.
+        # TODO: when a future version's install script works on PG11+, expand
         # this matrix and add tests for the upgrade path from 0.2.2 onwards.
-        pg: [11, 10]
+        pg: [10]
     name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
