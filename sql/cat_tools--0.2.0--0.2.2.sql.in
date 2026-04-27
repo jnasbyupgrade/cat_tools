@@ -535,15 +535,14 @@ DROP VIEW cat_tools.column;
 DROP VIEW _cat_tools.column;
 
 /*
- * Rebuild _cat_tools.column using omit_column() on _cat_tools.pg_attribute_v so that
- * attmissingval is appended AFTER the pre-existing computed columns. This ensures
- * column positions match what omit_column returns, then appends the new attmissingval
- * at the end (PostgreSQL only allows adding new columns at the end of a view).
+ * Rebuild _cat_tools.column with computed columns first and all pg_attribute_v
+ * columns (via %s) last. This ordering lets future CREATE OR REPLACE VIEW
+ * upgrades extend the pg_attribute_v column list at the end without disturbing
+ * existing column positions. See issue 13 for restoring logical ordering.
  */
 SELECT __cat_tools.exec(format($fmt$
 CREATE VIEW _cat_tools.column AS
-  SELECT %s
-    , pg_catalog.format_type(typoid, atttypmod) AS column_type
+  SELECT pg_catalog.format_type(typoid, atttypmod) AS column_type
     , CASE typtype
         WHEN 'd' THEN pg_catalog.format_type(typbasetype, typtypmod)
         WHEN 'e' THEN 'text'
@@ -557,14 +556,14 @@ CREATE VIEW _cat_tools.column AS
             AND d.adnum = a.attnum
             AND a.atthasdef
         ) AS column_default
-    , a.attmissingval
+    , %s
     FROM _cat_tools.pg_attribute_v a
       LEFT JOIN pg_constraint pk
         ON ( reloid = pk.conrelid )
           AND pk.contype = 'p'
 ;
 $fmt$
-  , __cat_tools.omit_column('_cat_tools.pg_attribute_v', array['attmissingval'])
+  , __cat_tools.omit_column('_cat_tools.pg_attribute_v')
 ));
 REVOKE ALL ON _cat_tools.column FROM public;
 

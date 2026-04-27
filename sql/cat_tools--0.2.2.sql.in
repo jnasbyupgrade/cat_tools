@@ -771,9 +771,16 @@ $fmt$
 ));
 REVOKE ALL ON _cat_tools.pg_attribute_v FROM public;
 
+/*
+ * Computed columns come first so that future CREATE OR REPLACE VIEW upgrades
+ * can extend the pg_attribute_v column list (via %s) at the end without
+ * breaking existing column positions. TODO: once issue 13 is resolved,
+ * switch back to logical ordering (raw pg_attribute_v columns first, computed
+ * columns after).
+ */
+SELECT __cat_tools.exec(format($fmt$
 CREATE OR REPLACE VIEW _cat_tools.column AS
-  SELECT *
-    , pg_catalog.format_type(typoid, atttypmod) AS column_type
+  SELECT pg_catalog.format_type(typoid, atttypmod) AS column_type
     , CASE typtype
         -- domain
         WHEN 'd' THEN pg_catalog.format_type(typbasetype, typtypmod)
@@ -789,11 +796,15 @@ CREATE OR REPLACE VIEW _cat_tools.column AS
             AND d.adnum = a.attnum
             AND a.atthasdef
         ) AS column_default
+    , %s
     FROM _cat_tools.pg_attribute_v a
       LEFT JOIN pg_constraint pk
         ON ( reloid = pk.conrelid )
           AND pk.contype = 'p'
 ;
+$fmt$
+  , __cat_tools.omit_column('_cat_tools.pg_attribute_v')
+));
 REVOKE ALL ON _cat_tools.column FROM public;
 
 @generated@

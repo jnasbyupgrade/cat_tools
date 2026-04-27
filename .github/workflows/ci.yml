@@ -69,6 +69,14 @@ jobs:
   extension-update-test:
     strategy:
       matrix:
+        # Restricted to PG10 and PG11 because the pre-0.2.2 install scripts
+        # (cat_tools--0.2.0.sql, cat_tools--0.2.1.sql) use unqualified SELECT *
+        # in views that join pg_constraint. PG12 made the `oid` system column
+        # visible in SELECT *, causing "column oid specified more than once"
+        # when those old scripts run. So we can only test upgrades from 0.2.0
+        # and 0.2.1 on PG versions where they install cleanly (PG10/11).
+        # TODO: when a future version's install script works on PG12+, expand
+        # this matrix and add tests for the upgrade path from 0.2.2 onwards.
         pg: [11, 10]
     name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
