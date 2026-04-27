@@ -18,7 +18,7 @@ $body$;
 CREATE FUNCTION __cat_tools.omit_column(
   rel text
   , omit name[] DEFAULT array['oid']
-) RETURNS text LANGUAGE sql IMMUTABLE AS $body$
+) RETURNS text LANGUAGE sql STABLE AS $body$
 SELECT array_to_string(array(
     SELECT attname
       FROM pg_attribute a
@@ -117,9 +117,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA cat_tools GRANT USAGE ON TYPES TO cat_tools__
  *
  * === Changes from 0.2.1 ===
  *
- * Note: cat_tools.pg_extension_v is recreated below (0.2.2 version) with the
- * GRANT that was missing in 0.2.0; the 0.2.1 intermediate recreation is omitted.
+ * cat_tools.pg_extension_v is new in 0.2.1 (did not exist in 0.2.0). Create it
+ * first so that pg_extension__get (which returns cat_tools.pg_extension_v) can
+ * be created immediately after. The view is recreated later in this script with
+ * the 0.2.2 definition (fix PG12+ oid visibility, add missing GRANT).
  */
+SELECT __cat_tools.exec(format($fmt$
+CREATE VIEW cat_tools.pg_extension_v AS
+  SELECT e.oid
+      , %s
+
+      , extnamespace::regnamespace AS extschema -- SED: REQUIRES 9.5!
+      , nspname AS extschema -- SED: PRIOR TO 9.5!
+
+      , extconfig::pg_catalog.regclass[] AS ext_config_tables
+    FROM pg_catalog.pg_extension e
+      LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+;
+$fmt$
+  , __cat_tools.omit_column('pg_catalog.pg_extension')
+));
 
 SELECT __cat_tools.create_function(
   'cat_tools.pg_extension__get'

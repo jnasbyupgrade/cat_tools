@@ -38,7 +38,7 @@ $body$;
 CREATE FUNCTION __cat_tools.omit_column(
   rel text
   , omit name[] DEFAULT array['oid']
-) RETURNS text LANGUAGE sql IMMUTABLE AS $body$
+) RETURNS text LANGUAGE sql STABLE AS $body$
 SELECT array_to_string(array(
     SELECT attname
       FROM pg_attribute a
