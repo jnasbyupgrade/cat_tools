@@ -52,6 +52,7 @@ TESTDIR		?= test
 TESTOUT		?= $(TESTDIR)
 TEST_SQL_FILES		+= $(wildcard $(TESTDIR)/sql/*.sql)
 TEST_RESULT_FILES	 = $(patsubst $(TESTDIR)/sql/%.sql,$(TESTDIR)/expected/%.out,$(TEST_SQL_FILES))
+
 TEST_FILES	 = $(TEST_SQL_FILES)
 REGRESS		 = $(sort $(notdir $(TEST_FILES:.sql=)))
 REGRESS_OPTS = --inputdir=$(TESTDIR) --outputdir=$(TESTOUT) # See additional setup below
@@ -188,7 +189,7 @@ ifeq ($(strip $(MODULES)),)
 MODULES =# Set to NUL so PGXS doesn't puke
 endif
 
-EXTRA_CLEAN  = META.json meta.mk control.mk $(wildcard ../$(PGXN)-*.zip) pg_tle/
+EXTRA_CLEAN  = $(wildcard ../$(PGXN)-*.zip) pg_tle/
 
 # Get Postgres version, as well as major (9.4, etc) version.
 # NOTE! In at least some versions, PGXS defines VERSION, so we intentionally don't use that variable
@@ -205,8 +206,9 @@ ifeq ($(GE91),yes)
 all: $(EXTENSION_VERSION_FILES)
 endif
 
-ifeq ($($call test, $(MAJORVER), -lt 13), yes)
-	REGRESS_OPTS += --load-language=plpgsql
+
+ifeq ($(call test, $(MAJORVER), -lt, 130), yes)
+REGRESS_OPTS += --load-language=plpgsql
 endif
 
 #

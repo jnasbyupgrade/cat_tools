@@ -19,6 +19,9 @@ control.mk
 # built targets
 # Note: Version-specific files (sql/*--*.sql) are now tracked in git and should be committed
 
+# test targets
+/test/.build/
+
 # Test artifacts
 results/
 regression.diffs
@@ -35,6 +38,7 @@ test/install/schedule
 # Misc
 tmp/
 .DS_Store
+.claude/worktrees/
 
 # pg_tle generated files
 /pg_tle/

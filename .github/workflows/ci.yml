@@ -17,3 +17,95 @@ jobs:
         run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: make test PGUSER=postgres
+
+  pg-upgrade-test:
+    strategy:
+      matrix:
+        include:
+          - old_pg: "10"
+            new_pg: "11"
+          - old_pg: "10"
+            new_pg: "18"
+          - old_pg: "11"
+            new_pg: "12"
+          - old_pg: "11"
+            new_pg: "18"
+          - old_pg: "12"
+            new_pg: "13"
+          - old_pg: "12"
+            new_pg: "18"
+    name: 🔄 pg_upgrade ${{ matrix.old_pg }} → ${{ matrix.new_pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - name: Start PostgreSQL ${{ matrix.old_pg }}
+        run: pg-start ${{ matrix.old_pg }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
+      - name: Install cat_tools into old cluster
+        run: make install PGUSER=postgres
+      - name: Test cat_tools on old cluster
+        run: make test PGUSER=postgres
+      - name: Prepare upgrade test database
+        run: |
+          createdb -U postgres cat_tools_upgrade_test
+          psql -U postgres -d cat_tools_upgrade_test -c "CREATE EXTENSION cat_tools"
+      - name: Install PostgreSQL ${{ matrix.new_pg }}
+        run: apt-get install -y postgresql-${{ matrix.new_pg }} postgresql-server-dev-${{ matrix.new_pg }}
+      - name: Install cat_tools into new cluster
+        run: make install PGUSER=postgres PG_CONFIG=/usr/lib/postgresql/${{ matrix.new_pg }}/bin/pg_config
+      - name: Upgrade cluster to PostgreSQL ${{ matrix.new_pg }}
+        run: pg_upgradecluster -v ${{ matrix.new_pg }} ${{ matrix.old_pg }} test
+      - name: Verify extension version after upgrade
+        run: |
+          VERSION=$(psql -U postgres -d cat_tools_upgrade_test -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Extension version: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
+      - name: Run test suite on new cluster
+        run: make test PGUSER=postgres
+
+  extension-update-test:
+    strategy:
+      matrix:
+        # Restricted to PG10 only because the pre-0.2.2 install scripts use
+        # unqualified SELECT * in views over pg_attribute/pg_constraint:
+        #   - PG11 added attmissingval (pseudo-type anyarray) to pg_attribute,
+        #     so cat_tools--0.2.0.sql and cat_tools--0.2.1.sql fail on PG11+
+        #     with "column attmissingval has pseudo-type anyarray".
+        #   - PG12 made the `oid` system column visible in SELECT *, causing
+        #     "column oid specified more than once" on PG12+.
+        # PG10 is the only version where both old scripts install cleanly.
+        # TODO: when a future version's install script works on PG11+, expand
+        # this matrix and add tests for the upgrade path from 0.2.2 onwards.
+        pg: [10]
+    name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - name: Start PostgreSQL ${{ matrix.pg }}
+        run: pg-start ${{ matrix.pg }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
+      - name: Install cat_tools (all versions)
+        run: make install PGUSER=postgres
+      - name: Test upgrade from 0.2.0 (direct 0.2.0→0.2.2 path)
+        run: |
+          psql -U postgres -c "CREATE EXTENSION cat_tools VERSION '0.2.0'"
+          psql -U postgres -c "ALTER EXTENSION cat_tools UPDATE"
+          VERSION=$(psql -U postgres -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Version after 0.2.0 upgrade: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
+      - name: Test upgrade from 0.2.1 (0.2.1→0.2.2 path)
+        run: |
+          createdb -U postgres cat_tools_from_021
+          psql -U postgres -d cat_tools_from_021 -c "CREATE EXTENSION cat_tools VERSION '0.2.1'"
+          psql -U postgres -d cat_tools_from_021 -c "ALTER EXTENSION cat_tools UPDATE"
+          VERSION=$(psql -U postgres -d cat_tools_from_021 -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
+          echo "Version after 0.2.1 upgrade: ${VERSION:-<not found>}"
+          echo "$VERSION" | grep -q "0.2.2"
+      - name: Run test suite on updated extension
+        run: make test PGUSER=postgres

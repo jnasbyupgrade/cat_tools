@@ -1,1 +1,6 @@
+# cat_tools.sql is generated from cat_tools.sql.in by `make` and should not be committed.
 cat_tools.sql
+# Versioned .sql files are generated from .sql.in sources; ignore by default.
+cat_tools--*.sql
+# Historical exceptions — no .sql.in source; must be tracked directly.
+!cat_tools--0.1.*.sql

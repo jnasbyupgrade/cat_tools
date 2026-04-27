@@ -1,4 +1,87 @@
+DO $$
+BEGIN
+  CREATE ROLE cat_tools__usage NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END
+$$;
+
+/*
+ * NOTE: All pg_temp objects must be dropped at the end of the script!
+ * Otherwise the eventual DROP CASCADE of pg_temp when the session ends will
+ * also drop the extension! Instead of risking problems, create our own
+ * "temporary" schema instead.
+ */
+CREATE SCHEMA __cat_tools;
+CREATE FUNCTION __cat_tools.exec(
+  sql text
+) RETURNS void LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE DEBUG 'sql = %', sql;
+  EXECUTE sql;
+END
+$body$;
+CREATE FUNCTION __cat_tools.create_function(
+  function_name text
+  , args text
+  , options text
+  , body text
+  , grants text DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql AS $body$
+DECLARE
+
+  create_template CONSTANT text := $template$
+CREATE OR REPLACE FUNCTION %s(
+%s
+) RETURNS %s AS
+%L
+$template$
+  ;
+
+  revoke_template CONSTANT text := $template$
+REVOKE ALL ON FUNCTION %s(
+%s
+) FROM public;
+$template$
+  ;
+
+  grant_template CONSTANT text := $template$
+GRANT EXECUTE ON FUNCTION %s(
+%s
+) TO %s;
+$template$
+  ;
+
+BEGIN
+  PERFORM __cat_tools.exec( format(
+      create_template
+      , function_name
+      , args
+      , options
+      , body
+    ) )
+  ;
+  PERFORM __cat_tools.exec( format(
+      revoke_template
+      , function_name
+      , args
+    ) )
+  ;
+
+  IF grants IS NOT NULL THEN
+    PERFORM __cat_tools.exec( format(
+        grant_template
+        , function_name
+        , args
+        , grants
+      ) )
+    ;
+  END IF;
+END
+$body$;
+
 CREATE SCHEMA cat_tools;
+GRANT USAGE ON SCHEMA cat_tools TO cat_tools__usage;
 CREATE SCHEMA _cat_tools;
 
 CREATE OR REPLACE VIEW _cat_tools.pg_class_v AS
@@ -19,6 +102,7 @@ CREATE OR REPLACE VIEW cat_tools.pg_class_v AS
     WHERE NOT pg_is_other_temp_schema(relnamespace)
       AND relkind IN( 'r', 'v', 'f' )
 ;
+GRANT SELECT ON cat_tools.pg_class_v TO cat_tools__usage;
 
 CREATE OR REPLACE VIEW _cat_tools.pg_attribute_v AS
   SELECT a.*
@@ -70,10 +154,14 @@ CREATE OR REPLACE VIEW cat_tools.column AS
       )
     ORDER BY relschema, relname, attnum
 ;
+GRANT SELECT ON cat_tools.column TO cat_tools__usage;
 
 -- Borrowed from newsysviews: http://pgfoundry.org/projects/newsysviews/
-CREATE OR REPLACE FUNCTION _cat_tools._pg_sv_column_array( OID, SMALLINT[] )
-RETURNS NAME[] AS $$
+SELECT __cat_tools.create_function(
+  '_cat_tools._pg_sv_column_array'
+  , 'OID, SMALLINT[]'
+  , 'NAME[] LANGUAGE sql STABLE'
+  , $$
     SELECT ARRAY(
         SELECT a.attname
           FROM pg_catalog.pg_attribute a
@@ -81,11 +169,15 @@ RETURNS NAME[] AS $$
          WHERE attrelid = $1
          ORDER BY i
     )
-$$ LANGUAGE SQL stable;
+$$
+);
 
 -- Borrowed from newsysviews: http://pgfoundry.org/projects/newsysviews/
-CREATE OR REPLACE FUNCTION _cat_tools._pg_sv_table_accessible( OID, OID )
-RETURNS BOOLEAN AS $$
+SELECT __cat_tools.create_function(
+  '_cat_tools._pg_sv_table_accessible'
+  , 'OID, OID'
+  , 'boolean LANGUAGE sql STABLE'
+  , $$
     SELECT CASE WHEN has_schema_privilege($1, 'USAGE') THEN (
                   has_table_privilege($2, 'SELECT')
                OR has_table_privilege($2, 'INSERT')
@@ -96,7 +188,8 @@ RETURNS BOOLEAN AS $$
                OR has_table_privilege($2, 'TRIGGER')
            ) ELSE FALSE
     END;
-$$ LANGUAGE SQL immutable strict;
+$$
+);
 
 -- Borrowed from newsysviews: http://pgfoundry.org/projects/newsysviews/
 CREATE OR REPLACE VIEW cat_tools.pg_all_foreign_keys
@@ -164,11 +257,16 @@ AS
      AND k1.contype = 'f'
      AND _cat_tools._pg_sv_table_accessible(n1.oid, c1.oid)
 ;
+GRANT SELECT ON cat_tools.pg_all_foreign_keys TO cat_tools__usage;
 
-CREATE OR REPLACE FUNCTION cat_tools.currval(
+SELECT __cat_tools.create_function(
+  'cat_tools.currval'
+  , $$
   table_name text
   , column_name text
-) RETURNS bigint LANGUAGE plpgsql AS $body$
+$$
+  , $$bigint LANGUAGE plpgsql$$
+  , $body$
 DECLARE
   seq regclass;
 BEGIN
@@ -185,42 +283,62 @@ BEGIN
 
   RETURN currval(seq);
 END
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.enum_range(
-    enum regtype
-) RETURNS text[] LANGUAGE plpgsql STABLE AS $body$
+SELECT __cat_tools.create_function(
+  'cat_tools.enum_range'
+  , 'enum regtype'
+  , $$text[] LANGUAGE plpgsql STABLE$$
+  , $body$
 DECLARE
   ret text[];
 BEGIN
   EXECUTE format('SELECT pg_catalog.enum_range( NULL::%s )', enum) INTO ret;
   RETURN ret;
 END
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.enum_range_srf(
-  enum regtype
-) RETURNS SETOF text LANGUAGE sql AS $body$
+SELECT __cat_tools.create_function(
+  'cat_tools.enum_range_srf'
+  , 'enum regtype'
+  , $$SETOF text LANGUAGE sql$$
+  , $body$
 SELECT * FROM unnest( cat_tools.enum_range($1) ) AS r(enum_label)
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.pg_class(
-  rel regclass
-) RETURNS cat_tools.pg_class_v LANGUAGE sql STABLE AS $body$
+SELECT __cat_tools.create_function(
+  'cat_tools.pg_class'
+  , 'rel regclass'
+  , $$cat_tools.pg_class_v LANGUAGE sql STABLE$$
+  , $body$
 SELECT * FROM cat_tools.pg_class_v WHERE reloid = rel
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.name__check(
-  name_to_check text
-) RETURNS void LANGUAGE plpgsql AS $body$
+SELECT __cat_tools.create_function(
+  'cat_tools.name__check'
+  , 'name_to_check text'
+  , $$void LANGUAGE plpgsql$$
+  , $body$
 BEGIN
   IF name_to_check IS DISTINCT FROM name_to_check::name THEN
     RAISE '"%" becomes "%" when cast to name', name_to_check, name_to_check::name;
   END IF;
 END
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.trigger__parse(
+SELECT __cat_tools.create_function(
+  'cat_tools.trigger__parse'
+  , $$
   trigger_oid oid
   , OUT timing text
   , OUT events text[]
@@ -228,7 +346,9 @@ CREATE OR REPLACE FUNCTION cat_tools.trigger__parse(
   , OUT row_statement text
   , OUT when_clause text
   , OUT function_arguments text
-) RETURNS record LANGUAGE plpgsql AS $body$
+$$
+  , $$record LANGUAGE plpgsql$$
+  , $body$
 DECLARE
   r_trigger pg_catalog.pg_trigger;
   v_triggerdef text;
@@ -309,32 +429,61 @@ $$v_create_stanza = "%"
 
   RETURN;
 END
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.trigger__get_oid__loose(
+SELECT __cat_tools.create_function(
+  'cat_tools.trigger__get_oid__loose'
+  , $$
   trigger_table regclass
   , trigger_name text
-) RETURNS oid LANGUAGE sql AS $body$
+$$
+  , $$oid LANGUAGE sql$$
+  , $body$
   SELECT oid
     FROM pg_trigger
     WHERE tgrelid = trigger_table
       AND tgname = trigger_name
   ;
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
 
-CREATE OR REPLACE FUNCTION cat_tools.trigger__get_oid(
+SELECT __cat_tools.create_function(
+  'cat_tools.trigger__get_oid'
+  , $$
   trigger_table regclass
   , trigger_name text
-) RETURNS oid LANGUAGE plpgsql AS $body$
+$$
+  , $$oid LANGUAGE plpgsql$$
+  , $body$
 DECLARE
   v_oid oid;
 BEGIN
-  SELECT cat_tools.crigger__get_oid__loose( trigger_table, trigger_name )
-    INTO STRICT v_oid
-  ;
+  -- Note that because __loose isn't an SRF it'll always return a value
+  v_oid := cat_tools.trigger__get_oid__loose( trigger_table, trigger_name ) ;
+
+  IF v_oid IS NULL THEN
+    RAISE EXCEPTION 'trigger % on table % does not exist', trigger_name, trigger_table;
+  END IF;
 
   RETURN v_oid;
 END
-$body$;
+$body$
+  , 'cat_tools__usage'
+);
+
+DROP FUNCTION __cat_tools.exec(
+  sql text
+);
+DROP FUNCTION __cat_tools.create_function(
+  function_name text
+  , args text
+  , options text
+  , body text
+  , grants text
+);
+DROP SCHEMA __cat_tools;
 
 -- vi: expandtab ts=2 sw=2
