@@ -1,30 +1,42 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
+use File::Basename qw(dirname);
 
-# check-object-names.pl — Static name-presence check for upgrade drift.
+# update-lint.pl — Static name-presence check for upgrade drift.
 #
-# Compares object names between an old and new cat_tools install script,
-# then verifies the upgrade script covers all additions and removals.
+# Compares object names between two versions of install scripts, then
+# verifies the relevant upgrade script covers all additions and removals.
 #
 # Usage:
-#   perl check-object-names.pl \
-#       --old  sql/cat_tools--0.2.2.sql.in \
-#       --new  sql/cat_tools.sql.in \
-#       --upgrade sql/cat_tools--0.2.2--0.3.0.sql.in
+#   perl test/update-lint.pl <OLD_VERSION> <NEW_VERSION>
+#   perl test/update-lint.pl 0.2.2 0.3.0
+#
+# Expects sql/cat_tools--<OLD>.sql[.in], sql/cat_tools--<NEW>.sql[.in],
+# and sql/cat_tools--<OLD>--<NEW>.sql[.in] relative to the repo root.
 #
 # Exit 0 if no gaps found; exit 1 if gaps exist.
 
-my ($old_file, $new_file, $upgrade_file);
-while (@ARGV) {
-    my $arg = shift @ARGV;
-    if    ($arg eq '--old')     { $old_file     = shift @ARGV }
-    elsif ($arg eq '--new')     { $new_file     = shift @ARGV }
-    elsif ($arg eq '--upgrade') { $upgrade_file = shift @ARGV }
-    else  { die "Unknown argument: $arg\n" }
+my ($old_ver, $new_ver) = @ARGV;
+die "Usage: $0 OLD_VERSION NEW_VERSION\n  e.g.: $0 0.2.2 0.3.0\n"
+    unless $old_ver && $new_ver;
+
+# Locate the repo root relative to this script's directory.
+my $root = File::Basename::dirname(__FILE__) . '/..';
+
+# Prefer .sql.in (source) over .sql (generated).
+sub find_sql {
+    my ($name) = @_;
+    for my $ext (qw(.sql.in .sql)) {
+        my $path = "$root/sql/$name$ext";
+        return $path if -f $path;
+    }
+    die "Cannot find sql/$name.sql.in or sql/$name.sql under $root\n";
 }
-die "Usage: $0 --old OLD.sql.in --new NEW.sql.in --upgrade UPGRADE.sql.in\n"
-    unless $old_file && $new_file && $upgrade_file;
+
+my $old_file     = find_sql("cat_tools--$old_ver");
+my $new_file     = find_sql("cat_tools--$new_ver");
+my $upgrade_file = find_sql("cat_tools--$old_ver--$new_ver");
 
 # Read a file and strip @generated@ section-boundary markers.
 sub slurp {
@@ -36,7 +48,7 @@ sub slurp {
     return $content;
 }
 
-# Extract named objects from a sql.in file.
+# Extract named objects from a sql[.in] file.
 #
 # Returns a hash whose keys are:
 #   function:<qualified_name>       — from __cat_tools.create_function(...)
@@ -111,13 +123,13 @@ for my $obj (@removed) {
 my $ok = 1;
 
 if (@added) {
-    printf "=== Added in new version (%d objects) ===\n", scalar @added;
+    printf "=== Added in %s (%d objects) ===\n", $new_ver, scalar @added;
     print  "  $_\n" for @added;
     print  "\n";
 }
 
 if (@removed) {
-    printf "=== Removed from old version (%d objects) ===\n", scalar @removed;
+    printf "=== Removed in %s (%d objects) ===\n", $new_ver, scalar @removed;
     print  "  $_\n" for @removed;
     print  "\n";
 }
