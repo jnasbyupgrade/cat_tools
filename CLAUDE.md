@@ -6,6 +6,13 @@
 
 **Always open PRs against the main repo** (`Postgres-Extensions/cat_tools`), not a fork.
 
+## Terminology
+
+- **Extension update**: moving from one cat_tools version to another (e.g. `ALTER EXTENSION cat_tools UPDATE`). Always say "update" for this.
+- **PostgreSQL upgrade**: upgrading a PostgreSQL cluster to a newer major version (e.g. `pg_upgrade`, `pg_upgradecluster`). Always say "upgrade" for this.
+
+Never use "upgrade" to describe an extension version change, and never use "update" to describe a PostgreSQL cluster version change.
+
 ## SQL file conventions
 
 Rules for what to track in git:
@@ -22,11 +29,11 @@ Rules for what to track in git:
 ## CI: PostgreSQL version support
 
 PG10 is formally dropped as of the 0.3.0 release. The `ALTER TYPE ... ADD VALUE` statements
-in the 0.2.2→0.3.0 upgrade script cannot run inside an extension update script on PG10 (a
+in the 0.2.2→0.3.0 update script cannot run inside an extension update script on PG10 (a
 PG10 restriction lifted in PG12).
 
 The `extension-update-test` job tests `pg: [11, 12]` — these are the oldest versions where
-the 0.2.2 install script works. The 0.2.0/0.2.1 upgrade paths required PG10 and can no
+the 0.2.2 install script works. The 0.2.0/0.2.1 update paths required PG10 and can no
 longer be tested.
 
 ## Code Style

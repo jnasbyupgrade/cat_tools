@@ -70,7 +70,7 @@ jobs:
       matrix:
         # PG11-12: 0.2.2 is the oldest install script that works on PG11+. These
         # are the key compatibility boundary versions and are tested for the
-        # 0.2.2→0.3.0 upgrade path. (PG10 is dropped; the 0.2.0/0.2.1 upgrade
+        # 0.2.2→0.3.0 update path. (PG10 is dropped; the 0.2.0/0.2.1 update
         # paths required PG10 and can no longer be tested.)
         pg: [11, 12]
     name: ⬆️ Extension update test on PostgreSQL ${{ matrix.pg }}
@@ -88,13 +88,13 @@ jobs:
           echo "EXPECTED_VERSION=$(sed -n "s/^default_version = '//;s/'$//p" cat_tools.control)" >> $GITHUB_ENV
       - name: Install cat_tools (all versions)
         run: make install PGUSER=postgres
-      - name: Test upgrade from 0.2.2 (0.2.2→current path)
+      - name: Test update from 0.2.2 (0.2.2→current path)
         run: |
           createdb -U postgres cat_tools_from_022
           psql -U postgres -d cat_tools_from_022 -c "CREATE EXTENSION cat_tools VERSION '0.2.2'"
           psql -U postgres -d cat_tools_from_022 -c "ALTER EXTENSION cat_tools UPDATE"
           VERSION=$(psql -U postgres -d cat_tools_from_022 -tAc "SELECT extversion FROM pg_extension WHERE extname = 'cat_tools'")
-          echo "Version after 0.2.2 upgrade: ${VERSION:-<not found>}"
+          echo "Version after 0.2.2 update: ${VERSION:-<not found>}"
           echo "$VERSION" | grep -qF "$EXPECTED_VERSION"
       - name: Run test suite on updated extension
         run: make test PGUSER=postgres
