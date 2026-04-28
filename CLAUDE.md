@@ -19,20 +19,15 @@ Rules for what to track in git:
 5. Version-specific files MUST NEVER be edited manually — always edit `sql/cat_tools.sql.in`
    and regenerate.
 
-## CI: extension-update-test matrix
+## CI: PostgreSQL version support
 
-The `extension-update-test` job in `.github/workflows/ci.yml` is currently restricted to
-`pg: [10]` because that is the only PostgreSQL version where the pre-0.2.2 install scripts
-install cleanly:
-- PG 11 added `attmissingval` (pseudo-type `anyarray`) to `pg_attribute`; the old `SELECT *`
-  in `0.2.0`/`0.2.1` tries to include it directly, failing with "column attmissingval has
-  pseudo-type anyarray".
-- PG 12+ exposed the `oid` system column in `SELECT *`, breaking `0.2.0`/`0.2.1` with
-  "column oid specified more than once".
+PG10 is formally dropped as of the 0.3.0 release. The `ALTER TYPE ... ADD VALUE` statements
+in the 0.2.2→0.3.0 upgrade script cannot run inside an extension update script on PG10 (a
+PG10 restriction lifted in PG12).
 
-**When working on a new version:** review and expand this matrix. The new version's install
-script may support more PG versions, enabling testing of the upgrade path from older
-cat_tools versions on newer PostgreSQL.
+The `extension-update-test` job tests `pg: [11, 12]` — these are the oldest versions where
+the 0.2.2 install script works. The 0.2.0/0.2.1 upgrade paths required PG10 and can no
+longer be tested.
 
 ## Code Style
 
