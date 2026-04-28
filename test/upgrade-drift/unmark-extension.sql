@@ -19,4 +19,29 @@ SELECT format(
 FROM pg_depend
 WHERE refobjid = (SELECT oid FROM pg_extension WHERE extname = 'cat_tools')
   AND deptype = 'e'
-  AND classid != 'pg_extension'::regclass;
+  AND classid != 'pg_extension'::regclass
+  /*
+   * Skip types that cannot be individually removed from extension membership:
+   *
+   * 1. Implicitly-created array types (typcategory = 'A'): PostgreSQL creates
+   *    one automatically alongside every user-defined type; it is dropped
+   *    automatically when the base type is dropped.
+   *
+   * 2. Row types of relations (tables, views, materialized views): PostgreSQL
+   *    records the composite row type as an extension member, but ALTER
+   *    EXTENSION DROP only accepts the relation itself (e.g. DROP VIEW), not
+   *    the associated row type.  The relation entry in pg_depend handles it.
+   */
+  AND NOT (
+      classid = 'pg_type'::regclass
+      AND EXISTS (
+          SELECT 1 FROM pg_type t
+          WHERE t.oid = objid
+            AND (
+                t.typcategory = 'A'
+                OR EXISTS (
+                    SELECT 1 FROM pg_class c WHERE c.reltype = t.oid
+                )
+            )
+      )
+  );

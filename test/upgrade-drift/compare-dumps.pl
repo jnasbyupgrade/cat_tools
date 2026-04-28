@@ -7,6 +7,15 @@
 # Exits 0 if the schemas are equivalent after normalization; exits 1 and
 # prints a unified diff to stdout if they differ.
 #
+# Normalization strategy:
+#   pg_dump precedes every object with a 3-line section header:
+#       --
+#       -- Name: foo; Type: FUNCTION; Schema: cat_tools; Owner: postgres
+#       --
+#   We use these headers as block boundaries (then discard them).  This is
+#   more robust than blank-line splitting because function bodies may contain
+#   blank lines, which would otherwise cause spurious block splits.
+#
 use strict;
 use warnings;
 use File::Temp qw(tempfile);
@@ -21,45 +30,39 @@ sub normalize {
     my $content = do { local $/; <$fh> };
     close $fh;
 
-    my @kept;
-    for my $line (split /\n/, $content) {
-        # Strip SET statements (search_path, lock_timeout, etc.)
-        next if $line =~ /^SET \S/;
+    # Strip \restrict / \unrestrict nonces (random per-dump security tokens,
+    # always differ between a fresh install and an upgrade of the same version)
+    $content =~ s/^\\restrict \S+\n//mg;
+    $content =~ s/^\\unrestrict \S+\n//mg;
 
-        # Strip SELECT pg_catalog.set_config(...) emitted between objects
-        next if $line =~ /^SELECT pg_catalog\.set_config\(/;
+    # Strip pg_dump file-level boilerplate (header comment lines)
+    $content =~ s/^-- PostgreSQL database dump[^\n]*\n//mg;
+    $content =~ s/^-- Dumped (?:from|by) [^\n]*\n//mg;
 
-        # Strip bare '--' separator lines used by pg_dump as section dividers
-        next if $line eq '--';
+    # Strip SET statements (search_path, lock_timeout, etc.)
+    $content =~ s/^SET [^\n]+\n//mg;
 
-        # Strip pg_dump section header comment lines:
-        #   -- Name: foo; Type: FUNCTION; Schema: cat_tools; Owner: postgres
-        next if $line =~ /^-- Name: /;
+    # Strip SELECT pg_catalog.set_config(...) emitted between objects
+    $content =~ s/^SELECT pg_catalog\.set_config\([^\n]*\n//mg;
 
-        # Strip pg_dump file-level boilerplate header lines
-        next if $line =~ /^-- PostgreSQL database dump/;
-        next if $line =~ /^-- Dumped (?:from|by) /;
+    # Split into per-object blocks using pg_dump's 3-line section headers as
+    # boundaries.  Each object starts with:
+    #   --\n-- Name: ...; Type: ...; Schema: ...; Owner: ...\n--\n
+    # The header is discarded; only the DDL content of each block is kept.
+    my @blocks;
+    for my $chunk (split /\n--\n-- Name: [^\n]+\n--\n/, $content) {
+        $chunk =~ s/^\s+|\s+$//g;    # strip leading/trailing whitespace
+        next unless $chunk =~ /\S/;
 
-        # Strip CREATE EXTENSION and COMMENT ON EXTENSION lines — the
-        # extension record itself is always identical after both paths and
-        # its presence would add noise without signal.
-        next if $line =~ /^CREATE EXTENSION /;
-        next if $line =~ /^COMMENT ON EXTENSION /;
-        next if $line =~ /^ALTER EXTENSION /;
+        # Skip the extension's own CREATE/COMMENT/ALTER record — the extension
+        # record is always identical after both paths but varies only in OID.
+        next if $chunk =~ /^(?:CREATE|COMMENT ON|ALTER) EXTENSION\b/;
 
-        push @kept, $line;
+        # Normalize trailing whitespace per line
+        $chunk =~ s/[ \t]+$//mg;
+
+        push @blocks, $chunk;
     }
-
-    # Rejoin, split into per-object blocks on blank lines, drop empty blocks
-    my $text   = join("\n", @kept);
-    my @blocks = grep { /\S/ } split /\n{2,}/, $text;
-
-    # Normalize trailing whitespace within each block
-    @blocks = map {
-        (my $b = $_) =~ s/[ \t]+$//mg;
-        $b =~ s/^\n+|\n+$//g;
-        $b
-    } @blocks;
 
     return join("\n\n", sort @blocks) . "\n";
 }
