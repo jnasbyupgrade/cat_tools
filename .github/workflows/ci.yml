@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Set expected extension version
         run: |
-          echo "EXPECTED_VERSION=$(sed -n "s/^default_version = '//;s/'$//p" cat_tools.control)" >> $GITHUB_ENV
+          echo "EXPECTED_VERSION=$(sed -n "s/^default_version = '\(.*\)'$/\1/p" cat_tools.control)" >> $GITHUB_ENV
       - name: Install rsync
         run: apt-get install -y rsync
       - name: Install cat_tools into old cluster
@@ -85,7 +85,7 @@ jobs:
         run: apt-get install -y rsync
       - name: Set expected extension version
         run: |
-          echo "EXPECTED_VERSION=$(sed -n "s/^default_version = '//;s/'$//p" cat_tools.control)" >> $GITHUB_ENV
+          echo "EXPECTED_VERSION=$(sed -n "s/^default_version = '\(.*\)'$/\1/p" cat_tools.control)" >> $GITHUB_ENV
       - name: Install cat_tools (all versions)
         run: make install PGUSER=postgres
       - name: Test update from 0.2.2 (0.2.2→current path)
