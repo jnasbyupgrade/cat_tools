@@ -172,3 +172,25 @@ jobs:
           echo "$VERSION" | grep -qF "$EXPECTED_VERSION"
       - name: Run test suite on updated extension
         run: make test PGUSER=postgres
+
+  upgrade-drift-test:
+    strategy:
+      matrix:
+        # PG 11: oldest version where cat_tools--0.2.2.sql installs cleanly
+        # PG 12: oid-visibility boundary; important regression marker
+        # PG 18: latest; catches any new catalog drift
+        pg: [11, 12, 18]
+    name: 🔍 Upgrade drift test on PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    container: pgxn/pgxn-tools
+    steps:
+      - name: Start PostgreSQL ${{ matrix.pg }}
+        run: pg-start ${{ matrix.pg }}
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Install rsync
+        run: apt-get install -y rsync
+      - name: Install cat_tools (all versions)
+        run: make install PGUSER=postgres
+      - name: Run upgrade drift test
+        run: test/upgrade-drift/run-drift-test.sh
