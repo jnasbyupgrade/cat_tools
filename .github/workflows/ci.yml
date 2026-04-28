@@ -17,6 +17,18 @@ jobs:
         run: apt-get install -y rsync
       - name: Test on PostgreSQL ${{ matrix.pg }}
         run: make test PGUSER=postgres
+      - name: Run upgrade drift test
+        # Run on all supported PG versions to protect against changes in
+        # pg_dump output over time.
+        #
+        # cat_tools--0.2.2.sql installs cleanly on PG 10+, so the real
+        # ALTER EXTENSION UPDATE path is available on every version here.
+        # If a future oldest-supported predecessor cannot install on all
+        # supported versions, the fallback is DROP EXTENSION + CREATE
+        # EXTENSION as the "upgraded" path — that still exercises pg_dump
+        # normalization and OID-ordering differences even without testing
+        # the upgrade SQL itself (which extension-update-test covers).
+        run: test/upgrade-drift/run-drift-test.sh
 
   pg-upgrade-test:
     strategy:
@@ -173,37 +185,3 @@ jobs:
       - name: Run test suite on updated extension
         run: make test PGUSER=postgres
 
-  upgrade-drift-test:
-    strategy:
-      matrix:
-        # Run across all supported PG versions: pg_dump output format changes
-        # between major versions (e.g. new catalog columns, syntax variations),
-        # so we need to verify that our normalization handles every version we
-        # ship on.
-        #
-        # The drift test installs cat_tools 0.2.2 then ALTER EXTENSION UPDATEs
-        # to the current version.  cat_tools--0.2.2.sql installs cleanly on
-        # PG 10+ (the attmissingval/oid-visibility issues only affect 0.2.0 and
-        # 0.2.1), so the full upgrade path is available on every version here.
-        #
-        # If a future oldest-supported version rises above what 0.2.2 can
-        # install on, the fallback is to use DROP EXTENSION + CREATE EXTENSION
-        # as the "upgraded" path instead of ALTER EXTENSION UPDATE.  That still
-        # exercises pg_dump normalization across PG versions and catches OID-
-        # ordering differences, even though it no longer tests the upgrade SQL
-        # itself (which extension-update-test covers separately).
-        pg: [10, 11, 12, 13, 14, 15, 16, 17, 18]
-    name: 🔍 Upgrade drift test on PostgreSQL ${{ matrix.pg }}
-    runs-on: ubuntu-latest
-    container: pgxn/pgxn-tools
-    steps:
-      - name: Start PostgreSQL ${{ matrix.pg }}
-        run: pg-start ${{ matrix.pg }}
-      - name: Check out the repo
-        uses: actions/checkout@v4
-      - name: Install rsync
-        run: apt-get install -y rsync
-      - name: Install cat_tools (all versions)
-        run: make install PGUSER=postgres
-      - name: Run upgrade drift test
-        run: test/upgrade-drift/run-drift-test.sh
