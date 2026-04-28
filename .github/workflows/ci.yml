@@ -176,10 +176,23 @@ jobs:
   upgrade-drift-test:
     strategy:
       matrix:
-        # PG 11: oldest version where cat_tools--0.2.2.sql installs cleanly
-        # PG 12: oid-visibility boundary; important regression marker
-        # PG 18: latest; catches any new catalog drift
-        pg: [11, 12, 18]
+        # Run across all supported PG versions: pg_dump output format changes
+        # between major versions (e.g. new catalog columns, syntax variations),
+        # so we need to verify that our normalization handles every version we
+        # ship on.
+        #
+        # The drift test installs cat_tools 0.2.2 then ALTER EXTENSION UPDATEs
+        # to the current version.  cat_tools--0.2.2.sql installs cleanly on
+        # PG 10+ (the attmissingval/oid-visibility issues only affect 0.2.0 and
+        # 0.2.1), so the full upgrade path is available on every version here.
+        #
+        # If a future oldest-supported version rises above what 0.2.2 can
+        # install on, the fallback is to use DROP EXTENSION + CREATE EXTENSION
+        # as the "upgraded" path instead of ALTER EXTENSION UPDATE.  That still
+        # exercises pg_dump normalization across PG versions and catches OID-
+        # ordering differences, even though it no longer tests the upgrade SQL
+        # itself (which extension-update-test covers separately).
+        pg: [10, 11, 12, 13, 14, 15, 16, 17, 18]
     name: 🔍 Upgrade drift test on PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
