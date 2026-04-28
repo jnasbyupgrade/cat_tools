@@ -205,7 +205,7 @@ pgstart
 make install PGUSER=postgres
 
 # Run the drift test:
-cd test/upgrade-drift
+cd test/update-drift
 bash run-drift-test.sh postgres
 ```
 

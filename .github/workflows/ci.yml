@@ -28,7 +28,7 @@ jobs:
         # EXTENSION as the "upgraded" path — that still exercises pg_dump
         # normalization and OID-ordering differences even without testing
         # the upgrade SQL itself (which extension-update-test covers).
-        run: test/upgrade-drift/run-drift-test.sh
+        run: test/update-drift/run-drift-test.sh
 
   pg-upgrade-test:
     strategy:
