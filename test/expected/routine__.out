@@ -1,0 +1,60 @@
+\set ECHO none
+1..57
+ok 1 - Verify count from routine_kinds
+ok 2 - Simple sanity check of routine__type()
+ok 3 - Simple sanity check of routine__type() with enum
+ok 4 - SELECT cat_tools.routine__type('f'::cat_tools.routine_prokind)
+ok 5 - SELECT cat_tools.routine__type('p'::cat_tools.routine_prokind)
+ok 6 - SELECT cat_tools.routine__type('a'::cat_tools.routine_prokind)
+ok 7 - SELECT cat_tools.routine__type('w'::cat_tools.routine_prokind)
+ok 8 - SELECT cat_tools.routine__type('f'::"char")
+ok 9 - SELECT cat_tools.routine__type('p'::"char")
+ok 10 - SELECT cat_tools.routine__type('a'::"char")
+ok 11 - SELECT cat_tools.routine__type('w'::"char")
+ok 12 - SELECT cat_tools.routine__type('f')
+ok 13 - SELECT cat_tools.routine__type('p')
+ok 14 - SELECT cat_tools.routine__type('a')
+ok 15 - SELECT cat_tools.routine__type('w')
+ok 16 - Verify count from argument_modes
+ok 17 - Simple sanity check of routine__argument_mode()
+ok 18 - Simple sanity check of routine__argument_mode() with enum
+ok 19 - SELECT cat_tools.routine__argument_mode('i'::cat_tools.routine_proargmode)
+ok 20 - SELECT cat_tools.routine__argument_mode('o'::cat_tools.routine_proargmode)
+ok 21 - SELECT cat_tools.routine__argument_mode('b'::cat_tools.routine_proargmode)
+ok 22 - SELECT cat_tools.routine__argument_mode('v'::cat_tools.routine_proargmode)
+ok 23 - SELECT cat_tools.routine__argument_mode('t'::cat_tools.routine_proargmode)
+ok 24 - SELECT cat_tools.routine__argument_mode('i'::"char")
+ok 25 - SELECT cat_tools.routine__argument_mode('o'::"char")
+ok 26 - SELECT cat_tools.routine__argument_mode('b'::"char")
+ok 27 - SELECT cat_tools.routine__argument_mode('v'::"char")
+ok 28 - SELECT cat_tools.routine__argument_mode('t'::"char")
+ok 29 - SELECT cat_tools.routine__argument_mode('i')
+ok 30 - SELECT cat_tools.routine__argument_mode('o')
+ok 31 - SELECT cat_tools.routine__argument_mode('b')
+ok 32 - SELECT cat_tools.routine__argument_mode('v')
+ok 33 - SELECT cat_tools.routine__argument_mode('t')
+ok 34 - Verify count from volatilities
+ok 35 - Simple sanity check of routine__volatility()
+ok 36 - Simple sanity check of routine__volatility() with enum
+ok 37 - SELECT cat_tools.routine__volatility('i'::cat_tools.routine_provolatile)
+ok 38 - SELECT cat_tools.routine__volatility('s'::cat_tools.routine_provolatile)
+ok 39 - SELECT cat_tools.routine__volatility('v'::cat_tools.routine_provolatile)
+ok 40 - SELECT cat_tools.routine__volatility('i'::"char")
+ok 41 - SELECT cat_tools.routine__volatility('s'::"char")
+ok 42 - SELECT cat_tools.routine__volatility('v'::"char")
+ok 43 - SELECT cat_tools.routine__volatility('i')
+ok 44 - SELECT cat_tools.routine__volatility('s')
+ok 45 - SELECT cat_tools.routine__volatility('v')
+ok 46 - Verify count from parallel_safeties
+ok 47 - Simple sanity check of routine__parallel_safety()
+ok 48 - Simple sanity check of routine__parallel_safety() with enum
+ok 49 - SELECT cat_tools.routine__parallel_safety('s'::cat_tools.routine_proparallel)
+ok 50 - SELECT cat_tools.routine__parallel_safety('r'::cat_tools.routine_proparallel)
+ok 51 - SELECT cat_tools.routine__parallel_safety('u'::cat_tools.routine_proparallel)
+ok 52 - SELECT cat_tools.routine__parallel_safety('s'::"char")
+ok 53 - SELECT cat_tools.routine__parallel_safety('r'::"char")
+ok 54 - SELECT cat_tools.routine__parallel_safety('u'::"char")
+ok 55 - SELECT cat_tools.routine__parallel_safety('s')
+ok 56 - SELECT cat_tools.routine__parallel_safety('r')
+ok 57 - SELECT cat_tools.routine__parallel_safety('u')
+# TRANSACTION INTENTIONALLY LEFT OPEN!
