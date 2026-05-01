@@ -2,6 +2,8 @@
 
 \i test/setup.sql
 
+\set s cat_tools
+
 SET LOCAL ROLE :use_role;
 CREATE TEMP VIEW kinds AS
   SELECT
@@ -50,7 +52,6 @@ SELECT is(cat_tools.relation__kind(relkind)::text, kind, format('SELECT cat_tool
 ;
 
 -- relation__is_temp
-\set s cat_tools
 \set f relation__is_temp
 
 SET LOCAL ROLE :no_use_role;

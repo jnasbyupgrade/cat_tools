@@ -2,6 +2,8 @@
 
 \i test/setup.sql
 
+\set s cat_tools
+
 SET LOCAL ROLE :use_role;
 CREATE TEMP VIEW routine_kinds AS
   SELECT
@@ -187,7 +189,6 @@ SELECT is(cat_tools.routine__parallel_safety(proparallel::"char")::text, paralle
   FROM parallel_safeties
 ;
 
-\set s cat_tools
 CREATE TEMP VIEW func_calls AS
   SELECT * FROM (VALUES
     ('routine__parse_arg_types'::name, $$'x'$$::text)
