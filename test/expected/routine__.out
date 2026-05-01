@@ -1,5 +1,5 @@
 \set ECHO none
-1..97
+1..89
 ok 1 - Verify count from routine_kinds
 ok 2 - Simple sanity check of routine__type()
 ok 3 - Simple sanity check of routine__type() with enum
@@ -59,46 +59,34 @@ ok 56 - SELECT cat_tools.routine__parallel_safety('r')
 ok 57 - SELECT cat_tools.routine__parallel_safety('u')
 ok 58 - Verify public has no perms
 ok 59 - Verify public has no perms
-ok 60 - Verify public has no perms
-ok 61 - Security check should prevent execution when current_user != session_user
-ok 62 - Verify routine__parse_arg_types() with INOUT and OUT
-ok 63 - Verify routine__parse_arg_types() with just INOUT
-ok 64 - Verify routine__parse_arg_types() with just OUT
-ok 65 - Verify routine__parse_arg_types() with only inputs
-ok 66 - Verify routine__parse_arg_names() with INOUT and OUT
-ok 67 - Verify routine__parse_arg_names() with just INOUT
-ok 68 - Verify routine__parse_arg_names() with just OUT
-ok 69 - Verify routine__parse_arg_names() with only inputs
-ok 70 - Create pg_temp.test_function(anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[])
-ok 71 - Verify routine__arg_types() returns all argument types
-ok 72 - Verify routine__arg_types() with IN arguments only
-ok 73 - Verify routine__arg_types() with no arguments
-ok 74 - Verify routine__arg_types() with VARIADIC argument
-ok 75 - Verify routine__arg_names() returns argument names (unnamed function)
-ok 76 - Create pg_temp.named_function with named arguments
-ok 77 - Verify routine__arg_names() with named arguments
-ok 78 - Verify routine__arg_names() with no arguments
-ok 79 - Verify routine__arg_types_text() formatting
-ok 80 - Verify routine__arg_types_text() with simple types
-ok 81 - Verify routine__arg_types_text() with no arguments
-ok 82 - Verify routine__arg_types_text() with VARIADIC
-ok 83 - Verify routine__arg_names_text() formatting
-ok 84 - Verify routine__arg_names_text() with unnamed arguments
-ok 85 - Verify routine__arg_names_text() with built-in function
-ok 86 - Verify routine__arg_names_text() with no arguments
-ok 87 - Verify regprocedure()
-WARNING:  function__arg_types() is deprecated, use routine__parse_arg_types instead
-ok 88 - Verify function__arg_types() with INOUT and OUT
-WARNING:  function__arg_types() is deprecated, use routine__parse_arg_types instead
-ok 89 - Verify function__arg_types() with simple args
-WARNING:  function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
-ok 90 - Verify function__arg_types_text() with INOUT and OUT
-WARNING:  function__arg_types_text() is deprecated, use routine__parse_arg_types_text instead
-ok 91 - Verify function__arg_types_text() with simple args
-ok 92 - Function _cat_tools.function__arg_to_regprocedure(text, text, text) should not be security definer
-ok 93 - Function _cat_tools.function__drop_temp(regprocedure, text) should not be security definer
-ok 94 - Function cat_tools.routine__parse_arg_types(text) should not be security definer
-ok 95 - Function cat_tools.routine__parse_arg_names(text) should not be security definer
-ok 96 - Function cat_tools.routine__parse_arg_types_text(text) should not be security definer
-ok 97 - Function cat_tools.routine__parse_arg_names_text(text) should not be security definer
+ok 60 - Security check should prevent execution when current_user != session_user
+ok 61 - Verify routine__parse_arg_types() with INOUT and OUT
+ok 62 - Verify routine__parse_arg_types() with just INOUT
+ok 63 - Verify routine__parse_arg_types() with just OUT
+ok 64 - Verify routine__parse_arg_types() with only inputs
+ok 65 - Verify routine__parse_arg_names() with INOUT and OUT
+ok 66 - Verify routine__parse_arg_names() with just INOUT
+ok 67 - Verify routine__parse_arg_names() with just OUT
+ok 68 - Verify routine__parse_arg_names() with only inputs
+ok 69 - Create pg_temp.test_function(anyarray, OUT text, OUT "char", pg_class, int, VARIADIC boolean[])
+ok 70 - Verify routine__arg_types() returns all argument types
+ok 71 - Verify routine__arg_types() with IN arguments only
+ok 72 - Verify routine__arg_types() with no arguments
+ok 73 - Verify routine__arg_types() with VARIADIC argument
+ok 74 - Verify routine__arg_names() returns argument names (unnamed function)
+ok 75 - Create pg_temp.named_function with named arguments
+ok 76 - Verify routine__arg_names() with named arguments
+ok 77 - Verify routine__arg_names() with no arguments
+ok 78 - Verify routine__arg_types_text() formatting
+ok 79 - Verify routine__arg_types_text() with simple types
+ok 80 - Verify routine__arg_types_text() with no arguments
+ok 81 - Verify routine__arg_types_text() with VARIADIC
+ok 82 - Verify routine__arg_names_text() formatting
+ok 83 - Verify routine__arg_names_text() with unnamed arguments
+ok 84 - Verify routine__arg_names_text() with built-in function
+ok 85 - Verify routine__arg_names_text() with no arguments
+ok 86 - Function cat_tools.routine__parse_arg_types(text) should not be security definer
+ok 87 - Function cat_tools.routine__parse_arg_names(text) should not be security definer
+ok 88 - Function cat_tools.routine__parse_arg_types_text(text) should not be security definer
+ok 89 - Function cat_tools.routine__parse_arg_names_text(text) should not be security definer
 # TRANSACTION INTENTIONALLY LEFT OPEN!

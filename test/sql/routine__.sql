@@ -62,7 +62,7 @@ SELECT plan(
   + (1 + 2 + 3 * (SELECT count(*)::int FROM argument_modes)) -- routine__argument_mode
   + (1 + 2 + 3 * (SELECT count(*)::int FROM volatilities)) -- routine__volatility
   + (1 + 2 + 3 * (SELECT count(*)::int FROM parallel_safeties)) -- routine__parallel_safety
-  + 40 -- function.sql tests (routine__parse_arg_*, routine__arg_*, regprocedure, deprecated wrappers, security definer checks)
+  + 32 -- routine__parse_arg_*, routine__arg_*, and security definer checks for routine__ callers
 );
 
 -- routine__type
@@ -193,7 +193,6 @@ CREATE TEMP VIEW func_calls AS
   SELECT * FROM (VALUES
     ('routine__parse_arg_types'::name, $$'x'$$::text)
     , ('routine__parse_arg_names'::name, $$'x'$$::text)
-    , ('regprocedure'::name, $$'x', 'x'$$)
   ) v(fname, args)
 ;
 GRANT SELECT ON func_calls TO public;
@@ -394,54 +393,11 @@ SELECT is(
   , 'Verify routine__arg_names_text() with no arguments'
 );
 
-SELECT is(
-  :s.regprocedure( 'pg_temp.test_function', :'args' )
-  , 'pg_temp.test_function'::regproc::regprocedure
-  , 'Verify regprocedure()'
-);
-
--- Test deprecated wrapper functions still work
-\set VERBOSITY terse
-SELECT is(
-  :s.function__arg_types($$IN in_int int, INOUT inout_int_array int[], OUT out_char "char", anyelement, boolean DEFAULT false$$)
-  , '{int,int[],anyelement,boolean}'::regtype[]
-  , 'Verify function__arg_types() with INOUT and OUT'
-);
-
-SELECT is(
-  :s.function__arg_types($$int, text$$)
-  , '{int,text}'::regtype[]
-  , 'Verify function__arg_types() with simple args'
-);
-
-SELECT is(
-  :s.function__arg_types_text($$IN in_int int, INOUT inout_int_array int[], OUT out_char "char", anyelement, boolean DEFAULT false$$)
-  , 'integer, integer[], anyelement, boolean'
-  , 'Verify function__arg_types_text() with INOUT and OUT'
-);
-
-SELECT is(
-  :s.function__arg_types_text($$int, text$$)
-  , 'integer, text'
-  , 'Verify function__arg_types_text() with simple args'
-);
-
 /*
- * CRITICAL SECURITY TESTS: Helper functions must NOT be SECURITY DEFINER
- * If they were SECURITY DEFINER, they could be exploited for SQL injection attacks
- * since they execute dynamic SQL with elevated privileges.
+ * CRITICAL SECURITY TESTS: public routine__ functions must NOT be SECURITY DEFINER.
+ * If they were, they could be exploited for SQL injection since they execute
+ * dynamic SQL with elevated privileges.
  */
-
--- Test helper functions in _cat_tools schema
-\set f function__arg_to_regprocedure
-\set args_text 'text, text, text'
-SELECT string_to_array(:'args_text', ', ') AS args \gset
-SELECT isnt_definer('_cat_tools', :'f', :'args'::name[]);
-
-\set f function__drop_temp
-\set args_text 'regprocedure, text'
-SELECT string_to_array(:'args_text', ', ') AS args \gset
-SELECT isnt_definer('_cat_tools', :'f', :'args'::name[]);
 
 -- Test public functions in cat_tools schema
 \set f routine__parse_arg_types
