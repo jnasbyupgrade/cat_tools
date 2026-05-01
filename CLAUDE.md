@@ -28,9 +28,15 @@ Rules for what to track in git:
 
 ## CI: PostgreSQL version support
 
-PG10 and PG11 are not supported for the 0.2.2→0.3.0 update. The `ALTER TYPE ... ADD VALUE`
-statements in the update script cannot run inside an extension update script on PG10 or PG11
-(PROCESS_UTILITY_QUERY context); this restriction was lifted in PG12.
+**Policy:** Never support a fresh install on any PostgreSQL version where the extension
+update path is known to be broken — a version that cannot be updated to is not truly
+supported.
+
+Both PG10 and PG11 are dropped as of 0.3.0. The `ALTER TYPE ... ADD VALUE` statements in
+the update script cannot run inside an extension update script on PG11 or earlier
+(PROCESS_UTILITY_QUERY context); this restriction was lifted in PG12. Because a version
+that cannot be updated to is not truly supported, PG10 and PG11 support is dropped
+entirely. cat_tools 0.3.0 supports PG12+.
 
 The `extension-update-test` job tests `pg: [12]` — PG12 is the oldest version where the
 0.2.2→0.3.0 update works. PG11 (and PG10) cannot run `ALTER TYPE ... ADD VALUE` in

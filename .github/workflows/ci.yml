@@ -4,7 +4,7 @@ jobs:
   test:
     strategy:
       matrix:
-        pg: [18, 17, 16, 15, 14, 13, 12, 11]
+        pg: [18, 17, 16, 15, 14, 13, 12]
     name: 🐘 PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-latest
     container: pgxn/pgxn-tools
@@ -22,10 +22,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - old_pg: "11"
-            new_pg: "12"
-          - old_pg: "11"
-            new_pg: "18"
           - old_pg: "12"
             new_pg: "13"
           - old_pg: "12"
