@@ -1,0 +1,1808 @@
+#!/usr/bin/env perl
+#
+# update_lint - prove, statically, that an extension UPDATE script accounts for
+# every object the install scripts on either side of it disagree about.
+#
+# Parse two versioned install scripts, diff their object sets, and check that
+# the update script between them creates/drops/alters/grants/comments each
+# object the diff demands. No database, no `make`, no pg_config -- it reads the
+# tracked sql/*.sql.in sources directly, so it runs in a few hundred
+# milliseconds in the same CI job as the style linter.
+#
+# It exists because the rule it enforces is otherwise human-only: a PR that
+# changes an extension's SQL must also extend
+# sql/<ext>--<last-released>--<current>.sql.in so an existing install reaches
+# the same objects. Nothing else fails when that is forgotten until the runtime
+# check (bin/structural_diff via `bin/test_existing update-scenario`) runs, and
+# that needs a database, several PostgreSQL majors, and minutes of CI.
+#
+# This is an early-warning net, NOT an authority. It compares object IDENTITY,
+# never definition, so a changed function body or view definition is invisible
+# to it; bin/structural_diff remains the check that a fresh install and an
+# updated install are actually equivalent. A clean run here means only that no
+# object was added or removed without the update script mentioning it.
+#
+# USAGE:
+#   bin/update_lint
+#       Lint the current pair: the highest tracked released install snapshot
+#       under --sql-dir, updated to the version in sql/<ext>.sql.in.
+#
+#   bin/update_lint OLD_INSTALL NEW_INSTALL UPDATE_SCRIPT
+#       Lint an explicit trio of files. Nothing is inferred from the file
+#       names, so /dev/null is a legal argument for any of them: as
+#       OLD_INSTALL it means "compare against nothing", as UPDATE_SCRIPT it
+#       means "no update script at all".
+#
+#   bin/update_lint --versions OLD NEW
+#       Sugar for the trio, resolved under --sql-dir as
+#       <ext>--OLD, <ext>--NEW and <ext>--OLD--NEW (each preferring .sql.in
+#       over .sql). A missing update script is treated as EMPTY rather than
+#       skipped -- skipping would pass silently on exactly the omission this
+#       check exists to catch.
+#
+#   bin/update_lint --list-objects FILE
+#       Print one file's extracted object set, sorted, as "kind<TAB>identity".
+#       This asserts the parse on its own, independently of any diff, and is
+#       the first thing to run when a finding looks wrong. "data" entries are
+#       advisory (see handle_data below) and take no part in the diff.
+#
+#   Options: --sql-dir DIR (default "sql"), --ext NAME (default "cat_tools").
+#   Both affect only --versions and the default mode; paths are resolved
+#   relative to the current directory, never from this script's location.
+#
+#   Exit: 0 clean, 1 gaps found, 2 usage error, 3 unanalyzable input.
+#
+# SCOPE: only the update path INTO the current unreleased version is linted by
+# default. Version-specific install and update scripts are frozen once released
+# (SQL file conventions in CLAUDE.md -- never hand-edited again), so a finding
+# against a historical pair could never be fixed and would be permanently red.
+# Historical pairs stay reachable by passing an explicit pair, which is how the
+# test suite pins the pre-0.2.2 ACL gap as a known-bad oracle. There is
+# deliberately no baseline or suppression file: the exclusion is structural.
+#
+# LIMITATIONS:
+#
+# Version-conditional `-- SED: REQUIRES N!` / `-- SED: PRIOR TO N!` lines are
+# resolved for the NEWEST PostgreSQL: the REQUIRES branch stays code, the
+# PRIOR TO branch is commented out, exactly as sql.mk would do it. Every marker
+# in this tree names 9.3, 9.5 or 11 -- all below the PG12 support floor -- so
+# the REQUIRES branch is what installs on every major this extension supports,
+# and there is no supported server for which the other branch is the live one.
+# An object that exists ONLY below the floor is therefore not tracked at all.
+#
+# Keeping both branches instead is not the safer choice: it doubles every
+# version-gated line, and for a positional helper like create_function() a
+# doubled argument list shifts the arguments and mislabels the object.
+#
+# Coverage of a %PRESENCE_KIND (acl, comment, seclabel, rolegrant) is
+# direction-blind, so a REVOKE-only update script satisfies an ADDED grant. The
+# rationale is at the %PRESENCE_KIND definition, but note that the flagship
+# catch here -- five enum types that never got GRANT USAGE -- is in exactly
+# that class, so a stray REVOKE naming one of them would silence it.
+#
+# ALTER DEFAULT PRIVILEGES seeding assumes the role running
+# `ALTER EXTENSION ... UPDATE` is the one that ran `CREATE EXTENSION`:
+# pg_default_acl is keyed per grantor role, so a different role gets none of
+# the default privileges the old install left behind.
+#
+# Functions are keyed by name and ARITY, not by argument types, so two
+# overloads that differ only in a type collide into one key. This is live, not
+# hypothetical: cat_tools.relation__kind(cat_tools.relation_relkind) and
+# cat_tools.relation__kind(text) share a key, as do eight other names in
+# sql/cat_tools.sql.in. A brand-new overload of an existing name at an arity
+# that name already has therefore reads as "nothing added", and so do its ACL
+# and comment. Arity is nonetheless the right key: it is what a DROP writes
+# (PostgreSQL ignores OUT parameters, argument names and DEFAULT clauses when
+# matching a signature), so it is what makes a CREATE key and its later DROP
+# key identical -- which the same-file scaffolding cancellation depends on.
+# Distinguishing overloads would mean normalizing type names the way
+# PostgreSQL does, which is a catalog lookup, not a text transformation.
+
+use strict;
+use warnings;
+
+# Unbuffered, so the FAIL line on stderr lands after the findings it summarizes
+# when both streams are redirected into one CI log.
+$| = 1;
+
+my $PROG = 'bin/update_lint';
+
+# ---------------------------------------------------------------------------
+# Lexical scanner
+#
+# One pass over the text produces everything the rest of the script needs, so
+# that comments, string literals and quoted identifiers are handled in exactly
+# one place instead of being re-approximated by every regex:
+#
+#   $code    the text with comment regions blanked to spaces (same length)
+#   $masked  $code with literal AND quoted-identifier contents also blanked,
+#            for locating keywords (ON / TO / FROM / IS / AS) and the `;` and
+#            `,` separators, none of which may match inside a quoted name
+#   @depth   paren+bracket nesting depth at each character
+#   @lits    [content_start, content_end, delimiter] for every string literal
+#            and dollar-quoted string, in source order
+#   @open    [offset, description] for every construct with no closing
+#            delimiter, which makes the whole scan a guess: the text from there
+#            to EOF holds no recognizable statement boundary, so every object
+#            in it would silently disappear. Callers turn this into a hard
+#            error rather than analyzing what is left.
+#
+# Offsets are identical across $code, $masked and the original, so a regex on
+# $masked can index straight into $code.
+# ---------------------------------------------------------------------------
+
+sub scan {
+    my ($s) = @_;
+    my $n      = length $s;
+    my $code   = $s;
+    my $masked = $s;
+    my @depth  = (0) x ($n + 1);
+    my @lits;
+    my @open;
+
+    my $blank = sub {
+        my ($from, $to, $which) = @_;
+        return if $to <= $from;
+        substr($code,   $from, $to - $from) = ' ' x ($to - $from) if $which ne 'masked';
+        substr($masked, $from, $to - $from) = ' ' x ($to - $from);
+    };
+
+    my $i = 0;
+    my $d = 0;
+    while ($i < $n) {
+        $depth[$i] = $d;
+        my $c   = substr($s, $i, 1);
+        my $two = substr($s, $i, 2);
+
+        if ($two eq '--') {
+            my $nl = index($s, "\n", $i);
+            $nl = $n if $nl < 0;
+            $depth[$_] = $d for $i .. $nl - 1;
+            $blank->($i, $nl, 'both');
+            $i = $nl;
+            next;
+        }
+        if ($two eq '/*') {
+            # Block comments nest in PostgreSQL, so this counts rather than
+            # stopping at the first */.
+            my $start = $i;
+            my $nest  = 1;
+            $i += 2;
+            while ($i < $n && $nest) {
+                my $t = substr($s, $i, 2);
+                if    ($t eq '/*') { $nest++; $i += 2 }
+                elsif ($t eq '*/') { $nest--; $i += 2 }
+                else               { $i++ }
+            }
+            push @open, [ $start, 'block comment' ] if $nest;
+            $depth[$_] = $d for $start .. $i - 1;
+            $blank->($start, $i, 'both');
+            next;
+        }
+        if ($c eq '$') {
+            pos($s) = $i;
+            if ($s =~ /\G(\$(?:[A-Za-z_\x80-\xFF][A-Za-z0-9_\x80-\xFF]*)?\$)/gc) {
+                # A dollar-quoted string is consumed atomically: the same tag
+                # cannot nest, so the first repeat of the opening tag ends it.
+                # This is what keeps a $template$...$template$ inside a
+                # $body$...$body$ from being seen as SQL of its own.
+                my $tag   = $1;
+                my $cs    = $i + length $tag;
+                my $close = index($s, $tag, $cs);
+                my $ce    = $close < 0 ? $n : $close;
+                my $end   = $close < 0 ? $n : $close + length $tag;
+                push @open, [ $i, "dollar-quoted string $tag" ] if $close < 0;
+                $depth[$_] = $d for $i .. $end - 1;
+                push @lits, [ $cs, $ce, $tag ];
+                $blank->($cs, $ce, 'masked');
+                $i = $end;
+                next;
+            }
+            # A bare $ (plpgsql positional parameter) is just a character.
+            $i++;
+            next;
+        }
+        if ($c eq "'") {
+            # Backslash escapes apply only to an E'' literal; a plain literal
+            # ends its content only at an unpaired quote.
+            my $esc = 0;
+            if ($i > 0) {
+                my $p = substr($s, $i - 1, 1);
+                my $q = $i >= 2 ? substr($s, $i - 2, 1) : ' ';
+                $esc = 1 if ($p eq 'E' || $p eq 'e') && $q !~ /[A-Za-z0-9_\$]/;
+            }
+            my $start  = $i;
+            my $closed = 0;
+            $i++;
+            while ($i < $n) {
+                my $ch = substr($s, $i, 1);
+                if ($esc && $ch eq "\\") { $i += 2; next }
+                if ($ch eq "'") {
+                    if (substr($s, $i + 1, 1) eq "'") { $i += 2; next }
+                    $i++;
+                    $closed = 1;
+                    last;
+                }
+                $i++;
+            }
+            push @open, [ $start, 'string literal' ] unless $closed;
+            my $ce = $i - 1 > $start ? $i - 1 : $start + 1;
+            $depth[$_] = $d for $start .. $i - 1;
+            push @lits, [ $start + 1, $ce, "'" ];
+            $blank->($start + 1, $ce, 'masked');
+            next;
+        }
+        if ($c eq '"') {
+            # A quoted identifier keeps its content in $code -- names are read
+            # out of $code, and "char" must survive to be read -- but is blanked
+            # in $masked, because a `;` or `,` inside a name is not a separator.
+            my $start  = $i;
+            my $closed = 0;
+            $i++;
+            while ($i < $n) {
+                my $ch = substr($s, $i, 1);
+                if ($ch eq '"') {
+                    if (substr($s, $i + 1, 1) eq '"') { $i += 2; next }
+                    $i++;
+                    $closed = 1;
+                    last;
+                }
+                $i++;
+            }
+            push @open, [ $start, 'quoted identifier' ] unless $closed;
+            $depth[$_] = $d for $start .. $i - 1;
+            $blank->($start + 1, $closed ? $i - 1 : $i, 'masked');
+            next;
+        }
+        if ($c eq '(' || $c eq '[') { $depth[$i] = $d; $d++; $i++; next }
+        if ($c eq ')' || $c eq ']') { $d-- if $d > 0; $depth[$i] = $d; $i++; next }
+        $i++;
+    }
+    $depth[$n] = $d;
+    return ($code, $masked, \@depth, \@lits, \@open);
+}
+
+# Split into top-level statements. Returns [ { text, offset } ], where offset
+# indexes into the ORIGINAL string so callers can turn it into a line number.
+sub split_stmts {
+    my ($s) = @_;
+    my ($code, $masked, $depth) = scan($s);
+    my @out;
+    my $start = 0;
+    my $n     = length $code;
+    for (my $i = 0 ; $i < $n ; $i++) {
+        next unless substr($masked, $i, 1) eq ';' && $depth->[$i] == 0;
+        push @out, { text => substr($code, $start, $i - $start), offset => $start };
+        $start = $i + 1;
+    }
+    push @out, { text => substr($code, $start), offset => $start } if $start < $n;
+    return [ grep { $_->{text} =~ /\S/ } @out ];
+}
+
+# Split on commas at nesting depth 0, outside literals and comments.
+sub split_top_commas {
+    my ($s) = @_;
+    my ($code, $masked, $depth) = scan($s);
+    my @out;
+    my $start = 0;
+    my $n     = length $code;
+    for (my $i = 0 ; $i < $n ; $i++) {
+        next unless substr($masked, $i, 1) eq ',' && $depth->[$i] == 0;
+        push @out, substr($code, $start, $i - $start);
+        $start = $i + 1;
+    }
+    push @out, substr($code, $start);
+    return @out;
+}
+
+# Content of $s if it is exactly one string literal, else undef.
+sub literal_value {
+    my ($s) = @_;
+    my ($code, $masked, $depth, $lits) = scan($s);
+    return undef unless @$lits == 1;
+    my ($cs, $ce, $delim) = @{ $lits->[0] };
+    my $before = substr($code, 0, $cs - ($delim eq "'" ? 1 : length $delim));
+    my $after  = substr($code, $ce + ($delim eq "'" ? 1 : length $delim));
+    return undef if $before =~ /\S/ || $after =~ /\S/;
+    my $v = substr($code, $cs, $ce - $cs);
+    $v =~ s/''/'/g if $delim eq "'";
+    return $v;
+}
+
+# ---------------------------------------------------------------------------
+# Identifier and name handling
+# ---------------------------------------------------------------------------
+
+my $IDENT = qr/(?:"(?:[^"]|"")*"|[A-Za-z_\x80-\xFF][A-Za-z0-9_\$\x80-\xFF]*)/;
+my $QNAME = qr/$IDENT(?:\s*\.\s*$IDENT)*/;
+
+# Canonical form of a possibly-qualified, possibly-quoted name. The repo is
+# uniformly lowercase and unquoted apart from "char", so folding everything to
+# unquoted lowercase makes a CREATE key and its matching DROP key identical --
+# which is what the same-file scaffolding cancellation below depends on.
+sub norm_name {
+    my ($raw) = @_;
+    return undef unless defined $raw;
+    $raw =~ s/\s*\.\s*/./g;
+    $raw =~ s/\A\s+//;
+    $raw =~ s/\s+\z//;
+    my @parts;
+    for my $p (split /\./, $raw) {
+        $p =~ s/\A"//;
+        $p =~ s/"\z//;
+        $p =~ s/""/"/g;
+        push @parts, lc $p;
+    }
+    return join '.', @parts;
+}
+
+sub schema_of {
+    my ($name) = @_;
+    return undef unless defined $name && $name =~ /\A([^.]+)\./;
+    return $1;
+}
+
+# Consume a leading qualified name from $$ref, returning its canonical form.
+sub take_name {
+    my ($ref) = @_;
+    $$ref =~ s/\A\s+//;
+    return undef unless $$ref =~ s/\A($QNAME)//;
+    return norm_name($1);
+}
+
+# Consume a leading parenthesized group from $$ref, returning its inner text.
+sub take_paren_group {
+    my ($ref) = @_;
+    $$ref =~ s/\A\s+//;
+    return undef unless substr($$ref, 0, 1) eq '(';
+    my (undef, undef, $depth) = scan($$ref);
+    my $n = length $$ref;
+    for (my $i = 1 ; $i < $n ; $i++) {
+        next unless substr($$ref, $i, 1) eq ')' && $depth->[$i] == 0;
+        my $inner = substr($$ref, 1, $i - 1);
+        $$ref = substr($$ref, $i + 1);
+        return $inner;
+    }
+    return undef;
+}
+
+# PostgreSQL ignores OUT parameters, argument names and DEFAULT clauses when
+# matching a function signature, so arity over the non-OUT arguments is the
+# cheapest identity that survives the argument-name differences between a
+# CREATE and its later DROP. See the header's LIMITATIONS for what that costs.
+sub arity_of_args {
+    my ($args) = @_;
+    return 0 unless defined $args && $args =~ /\S/;
+    my $n = 0;
+    for my $p (split_top_commas($args)) {
+        next unless $p =~ /\S/;
+        $n++ unless $p =~ /\A\s*OUT\b/i;
+    }
+    return $n;
+}
+
+# ---------------------------------------------------------------------------
+# Object-type vocabulary
+#
+# Longest phrase wins, so multi-word types are listed before the single words
+# they start with. Types with no use in this extension today are still listed
+# so that a statement naming one is RECOGNIZED; whether it can then be given a
+# key is a separate question, answered by %FORBIDDEN_OBJ and %UNKEYABLE_OBJ
+# below.
+# ---------------------------------------------------------------------------
+
+my @OBJ_TYPES = (
+    'TEXT SEARCH CONFIGURATION', 'TEXT SEARCH DICTIONARY',
+    'TEXT SEARCH PARSER',        'TEXT SEARCH TEMPLATE',
+    'FOREIGN DATA WRAPPER',      'MATERIALIZED VIEW',
+    'FOREIGN TABLE',             'OPERATOR CLASS',
+    'OPERATOR FAMILY',           'USER MAPPING',
+    'ACCESS METHOD',             'EVENT TRIGGER',
+    'SCHEMA', 'TYPE', 'DOMAIN', 'VIEW', 'TABLE', 'SEQUENCE', 'INDEX',
+    'FUNCTION', 'PROCEDURE', 'ROUTINE', 'AGGREGATE', 'CAST', 'TRANSFORM',
+    'OPERATOR', 'TRIGGER', 'RULE', 'POLICY', 'STATISTICS', 'COLLATION',
+    'CONVERSION', 'LANGUAGE', 'SERVER', 'ROLE', 'USER', 'GROUP',
+    'PUBLICATION', 'SUBSCRIPTION', 'DATABASE', 'TABLESPACE', 'EXTENSION',
+);
+
+# Object types that must never appear in an extension script (they are
+# forbidden inside one, inside a transaction block, or both).
+my %FORBIDDEN_OBJ = map { $_ => 1 }
+    ('PUBLICATION', 'SUBSCRIPTION', 'DATABASE', 'TABLESPACE', 'EXTENSION');
+
+# Object types whose identity is not their name: a trigger, policy or rule is
+# identified by its name AND the relation it hangs off, an operator by its
+# argument types, a transform by its type and language, a user mapping by its
+# user and server. CREATE, DROP, ALTER and COMMENT each name that second half
+# differently, so each type would need four parses of its own. None is used by
+# this extension, and a key built from the name alone would be actively wrong
+# -- two same-named triggers on different tables would collide into one -- so
+# every form naming one is a hard error instead. The day one is needed the
+# failure says exactly that, and the handling gets written then.
+my %UNKEYABLE_OBJ = map { $_ => 1 }
+    ('TRIGGER', 'RULE', 'POLICY', 'OPERATOR', 'OPERATOR CLASS',
+     'OPERATOR FAMILY', 'TRANSFORM', 'USER MAPPING');
+
+# True (having recorded the error) if $objtype cannot carry a key here.
+sub reject_objtype {
+    my ($ctx, $st, $verb, $objtype) = @_;
+    if ($FORBIDDEN_OBJ{$objtype}) {
+        err($ctx, $st, "$verb $objtype is not allowed in an extension script");
+        return 1;
+    }
+    if ($UNKEYABLE_OBJ{$objtype}) {
+        err($ctx, $st, "$objtype is not identified by its name alone; update_lint has no handling for it");
+        return 1;
+    }
+    return 0;
+}
+
+# Key prefix per object type. Relation-like types share one namespace because
+# they share one PostgreSQL namespace: a view cannot be replaced by a table of
+# the same name without the diff noticing.
+my %KIND_OF = (
+    'SCHEMA'    => 'schema',
+    'TYPE'      => 'type',
+    'DOMAIN'    => 'type',
+    'VIEW'      => 'relation',
+    'MATERIALIZED VIEW' => 'relation',
+    'TABLE'     => 'relation',
+    'FOREIGN TABLE'     => 'relation',
+    'SEQUENCE'  => 'relation',
+    'FUNCTION'  => 'function',
+    'PROCEDURE' => 'function',
+    'ROUTINE'   => 'function',
+    'AGGREGATE' => 'aggregate',
+    'CAST'      => 'cast',
+    'ROLE'      => 'role',
+    'USER'      => 'role',
+    'GROUP'     => 'role',
+);
+
+sub kind_of {
+    my ($objtype) = @_;
+    return $KIND_OF{$objtype} if exists $KIND_OF{$objtype};
+    my $k = lc $objtype;
+    $k =~ s/\s+/_/g;
+    return $k;
+}
+
+# A multi-word phrase as a pattern that tolerates any whitespace, including a
+# newline, between its words.
+sub phrase_re { my ($p) = @_; return join '\s+', map { quotemeta } split / /, $p }
+
+# Consume a leading object-type phrase from $$ref.
+sub take_objtype {
+    my ($ref) = @_;
+    $$ref =~ s/\A\s+//;
+    for my $t (@OBJ_TYPES) {
+        my $re = phrase_re($t);
+        return $t if $$ref =~ s/\A$re\b//i;
+    }
+    return undef;
+}
+
+# ---------------------------------------------------------------------------
+# Parse context
+# ---------------------------------------------------------------------------
+
+sub new_ctx {
+    my (%o) = @_;
+    return {
+        path    => $o{path},
+        # created/dropped map a key to the SEQUENCE NUMBER of the last event of
+        # that direction, not to a bare flag. Comparing the two is what tells a
+        # created-then-dropped scaffold (cancels) from a dropped-then-created
+        # rebuild (does not); numbering starts at 1 so every recorded key stays
+        # truthy for the plain set-membership tests elsewhere.
+        seq     => 0,
+        created => {},
+        dropped => {},
+        touched => {},
+        cascade => {},        # dropped keys whose drop was a CASCADE
+        data    => {},        # table => concatenated normalized DML text
+        adp     => { map { $_ => { %{ $o{seed_adp}{$_} } } }
+                     keys %{ $o{seed_adp} || {} } },
+        errors  => [],
+    };
+}
+
+# A name carrying a format() placeholder is not a real identity -- it is a
+# template that only resolves at run time -- so it is dropped rather than
+# tracked or reported.
+sub unresolvable { my ($k) = @_; return !defined $k || $k =~ /%/ }
+
+sub add_key {
+    my ($ctx, $key) = @_;
+    return if unresolvable($key);
+    $ctx->{created}{$key} = ++$ctx->{seq};
+    $ctx->{touched}{$key} = 1;
+}
+
+sub del_key {
+    my ($ctx, $key, $cascade) = @_;
+    return if unresolvable($key);
+    $ctx->{dropped}{$key} = ++$ctx->{seq};
+    $ctx->{touched}{$key} = 1;
+    $ctx->{cascade}{$key} = 1 if $cascade;
+}
+
+# ADD and DROP forms of the same clause differ only in direction, so call sites
+# build the key and leave the direction here.
+sub key_op {
+    my ($ctx, $op, $key) = @_;
+    uc($op) eq 'ADD' ? add_key($ctx, $key) : del_key($ctx, $key);
+}
+
+sub touch_key {
+    my ($ctx, $key) = @_;
+    return if unresolvable($key);
+    $ctx->{touched}{$key} = 1;
+}
+
+sub err_at {
+    my ($ctx, $offset, $msg) = @_;
+    push @{ $ctx->{errors} }, "$ctx->{path}:" . $ctx->{line_of}->($offset) . ": $msg";
+}
+
+sub err {
+    my ($ctx, $st, $msg) = @_;
+    my $line = $ctx->{line_of}->($st->{offset});
+    my $snip = $st->{text};
+    $snip =~ s/\s+/ /g;
+    $snip =~ s/\A //;
+    $snip = substr($snip, 0, 70) . '...' if length $snip > 73;
+    push @{ $ctx->{errors} }, "$ctx->{path}:$line: $msg: $snip";
+}
+
+# ---------------------------------------------------------------------------
+# Statement processing
+# ---------------------------------------------------------------------------
+
+# Statements of one SQL text stream -- the file itself, or a payload reached
+# through a dynamic-SQL gateway -- with offsets rebased onto the file.
+#
+# An unterminated comment, string or dollar quote is refused here rather than
+# analyzed: the text past the opening delimiter holds no statement boundary the
+# scanner can trust, so it fuses onto the statement in progress and every
+# object in it vanishes without a trace. Each stream needs its own check
+# because the outer scan steps over a gateway payload as one literal, never
+# looking inside it.
+sub checked_stmts {
+    my ($ctx, $text, $base) = @_;
+    my (undef, undef, undef, undef, $open) = scan($text);
+    if (@$open) {
+        err_at($ctx, $base + $_->[0], "unterminated $_->[1]") for @$open;
+        return [];
+    }
+    my $sts = split_stmts($text);
+    $_->{offset} += $base for @$sts;
+    return $sts;
+}
+
+sub process_sql {
+    my ($ctx, $sql, $base_offset) = @_;
+    process_stmt($ctx, $_) for @{ checked_stmts($ctx, $sql, $base_offset || 0) };
+}
+
+sub process_stmt {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+    return unless $t =~ /\S/;
+    # Advance the offset past the stripped whitespace so a reported line number
+    # points at the statement, not at the newline that ended the previous one.
+    my $lead = $t =~ s/\A(\s+)// ? length $1 : 0;
+    $st = { %$st, text => $t, offset => $st->{offset} + $lead };
+
+    my ($kw) = $t =~ /\A([A-Za-z]+)/;
+    return err($ctx, $st, 'unrecognized statement') unless defined $kw;
+    $kw = uc $kw;
+
+    return handle_create($ctx, $st)    if $kw eq 'CREATE';
+    return handle_alter($ctx, $st)     if $kw eq 'ALTER';
+    return handle_drop($ctx, $st)      if $kw eq 'DROP';
+    return handle_acl($ctx, $st)       if $kw eq 'GRANT' || $kw eq 'REVOKE';
+    return handle_comment($ctx, $st)   if $kw eq 'COMMENT';
+    return handle_seclabel($ctx, $st)  if $kw eq 'SECURITY';
+    return handle_do($ctx, $st)        if $kw eq 'DO';
+    return handle_select($ctx, $st)    if $kw eq 'SELECT';
+    return handle_data($ctx, $st)
+        if $kw =~ /\A(?:INSERT|UPDATE|DELETE|TRUNCATE|COPY|MERGE)\z/;
+
+    # Physical/maintenance commands: no catalog-structural effect, so they
+    # cannot change the object set.
+    return if $kw =~ /\A(?:CLUSTER|ANALYZE|ANALYSE|REINDEX)\z/;
+    return if $t =~ /\AREFRESH\s+MATERIALIZED\s+VIEW\b/i;
+
+    return err($ctx, $st, 'this command cannot run inside an extension script')
+        if $kw =~ /\A(?:BEGIN|COMMIT|ROLLBACK|ABORT|END|SAVEPOINT|RELEASE|START|PREPARE|VACUUM)\z/;
+
+    if ($kw eq 'SET' || $kw eq 'RESET') {
+        # Session GUCs are inert here. The state-changing SET forms are not.
+        return err($ctx, $st, 'state-changing SET is not allowed in an extension script')
+            if $t =~ /\ASET\s+(?:ROLE|SESSION\s+AUTHORIZATION|CONSTRAINTS|TRANSACTION)\b/i;
+        return;
+    }
+
+    return err($ctx, $st, 'unrecognized statement');
+}
+
+# --- CREATE ----------------------------------------------------------------
+
+sub handle_create {
+    my ($ctx, $st) = @_;
+    my $rest = $st->{text};
+    $rest =~ s/\A\s*CREATE\s+//i;
+    1 while $rest =~ s/\A(?:OR\s+REPLACE|TEMPORARY|TEMP|GLOBAL|LOCAL|UNLOGGED|RECURSIVE|UNIQUE|CONSTRAINT|DEFAULT|TRUSTED|PROCEDURAL)\s+//i;
+
+    my $objtype = take_objtype(\$rest);
+    return err($ctx, $st, 'unrecognized CREATE') unless defined $objtype;
+    return if reject_objtype($ctx, $st, 'CREATE', $objtype);
+    return err($ctx, $st, 'CREATE INDEX CONCURRENTLY cannot run in a transaction block')
+        if $objtype eq 'INDEX' && $rest =~ /\A\s*CONCURRENTLY\b/i;
+
+    $rest =~ s/\A\s*IF\s+NOT\s+EXISTS\s+//i;
+
+    if ($objtype eq 'CAST') {
+        my $group = take_paren_group(\$rest);
+        return err($ctx, $st, 'unparsable CREATE CAST') unless defined $group;
+        return err($ctx, $st, 'unparsable CREATE CAST')
+            unless $group =~ /\A\s*($QNAME)\s+AS\s+($QNAME)\s*\z/i;
+        add_key($ctx, 'cast:' . norm_name($1) . '=>' . norm_name($2));
+        return;
+    }
+
+    if ($objtype eq 'SCHEMA') {
+        # CREATE SCHEMA AUTHORIZATION role names the schema after the role.
+        my $name = $rest =~ s/\A\s*AUTHORIZATION\s+//i
+            ? take_name(\$rest)
+            : do { my $n = take_name(\$rest);
+                   $rest =~ s/\A\s*AUTHORIZATION\s+$QNAME//i;
+                   $n };
+        return err($ctx, $st, 'unparsable CREATE SCHEMA') unless defined $name;
+        # Schema elements are CREATE statements of their own, and this reads
+        # none of them, so it must not claim to have read the statement.
+        return err($ctx, $st, 'CREATE SCHEMA with schema elements is not handled')
+            if $rest =~ /\S/;
+        add_key($ctx, "schema:$name");
+        return;
+    }
+
+    if ($objtype eq 'INDEX') {
+        # An index lives in its TABLE's schema, and CREATE INDEX names the
+        # index unqualified while DROP INDEX names it qualified, so the schema
+        # has to come off the table for the two keys to meet.
+        return err($ctx, $st, 'CREATE INDEX without a name generates one that cannot be predicted')
+            if $rest =~ /\A\s*ON\b/i;
+        my $name = take_name(\$rest);
+        return err($ctx, $st, 'unparsable CREATE INDEX') unless defined $name;
+        return err($ctx, $st, 'unparsable CREATE INDEX') unless $rest =~ s/\A\s*ON\s+//i;
+        $rest =~ s/\A\s*ONLY\s+//i;
+        my $table = take_name(\$rest);
+        return err($ctx, $st, 'unparsable CREATE INDEX') unless defined $table;
+        my $schema = schema_of($table);
+        $name = "$schema.$name" if defined $schema && $name !~ /\./;
+        add_key($ctx, "index:$name");
+        return;
+    }
+
+    my $kind = kind_of($objtype);
+
+    if ($kind eq 'function' || $kind eq 'aggregate') {
+        my $name = take_name(\$rest);
+        return err($ctx, $st, "unparsable CREATE $objtype") unless defined $name;
+        my $args = take_paren_group(\$rest);
+        my $key  = "$kind:$name/" . arity_of_args($args);
+        add_key($ctx, $key);
+        adp_synthesize($ctx, $objtype, $key);
+        return;
+    }
+
+    my $name = take_name(\$rest);
+    return err($ctx, $st, "unparsable CREATE $objtype") unless defined $name;
+    add_key($ctx, "$kind:$name");
+    adp_synthesize($ctx, $objtype, "$kind:$name");
+
+    if ($objtype eq 'TYPE' || $objtype eq 'DOMAIN') {
+        if ($rest =~ /\A\s*AS\s+ENUM\s*(?=\()/i) {
+            $rest =~ s/\A\s*AS\s+ENUM\s*//i;
+            my $group = take_paren_group(\$rest);
+            add_key($ctx, "enumval:$name:$_") for enum_labels($group);
+        }
+        # A composite type. RANGE and the base-type form both put a keyword
+        # between AS and the parenthesis, so requiring one right after AS is
+        # what tells the composite apart.
+        elsif ($objtype eq 'TYPE' && $rest =~ /\A\s*AS\s*(?=\()/i) {
+            $rest =~ s/\A\s*AS\s*//i;
+            add_key($ctx, "attr:$name.$_") for column_names(take_paren_group(\$rest));
+        }
+    }
+    elsif ($objtype eq 'TABLE') {
+        my $group = take_paren_group(\$rest);
+        if (defined $group) {
+            add_key($ctx, "constraint:$name." . norm_name($1))
+                while $group =~ /\bCONSTRAINT\s+($IDENT)/gi;
+            add_key($ctx, "attr:$name.$_") for column_names($group);
+        }
+    }
+    return;
+}
+
+# Table-level clauses that share the element list with the columns. Everything
+# else in the list opens with its own column name.
+my $TABLE_CLAUSE = qr/\A\s*(?:CONSTRAINT|PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY
+                            |EXCLUDE|LIKE|PERIOD\s+FOR)\b/xi;
+
+# Column names out of a CREATE TABLE element list or a composite CREATE TYPE.
+# Both sides of every diff are FRESH INSTALL scripts, which state a relation's
+# final column list right here and never with an ALTER, so without this a
+# column added by editing a CREATE TABLE is not an object at all and its
+# missing ALTER TABLE ADD COLUMN cannot be reported.
+#
+# Depth-aware splitting is what keeps a type's own parentheses and commas
+# (numeric(10,2)) from reading as another column; a DEFAULT expression, an
+# inline CHECK and a table-level clause all stay inside the piece they belong
+# to for the same reason.
+sub column_names {
+    my ($group) = @_;
+    my @out;
+    for my $piece (object_list(defined $group ? $group : '')) {
+        next if $piece =~ /$TABLE_CLAUSE/;
+        my $p = $piece;
+        my $n = take_name(\$p);
+        push @out, $n if defined $n;
+    }
+    return @out;
+}
+
+sub enum_labels {
+    my ($group) = @_;
+    return () unless defined $group;
+    my ($code, undef, undef, $lits) = scan($group);
+    my @out;
+    for my $l (@$lits) {
+        next unless $l->[2] eq "'";
+        my $v = substr($code, $l->[0], $l->[1] - $l->[0]);
+        $v =~ s/''/'/g;
+        push @out, $v;
+    }
+    return @out;
+}
+
+# ALTER DEFAULT PRIVILEGES is not an object; it is persistent pg_default_acl
+# state that implicitly grants on every object of one CATEGORY created in that
+# schema AFTERWARDS, and it stays in effect for later update scripts too. It is
+# modelled as a per-schema, per-category flag, and every subsequent CREATE in a
+# flagged schema synthesizes the ACL key it would really produce.
+#
+# The category, not the key kind, is what the flag is stored under: TABLES and
+# SEQUENCES are separate default-privilege categories but share the `relation`
+# key kind, so a default grant on tables must not put an ACL on a sequence.
+my %ADP_CATEGORY_OF = (
+    'TYPE'      => 'TYPES',     'DOMAIN'            => 'TYPES',
+    'TABLE'     => 'TABLES',    'VIEW'              => 'TABLES',
+    'FOREIGN TABLE' => 'TABLES', 'MATERIALIZED VIEW' => 'TABLES',
+    'SEQUENCE'  => 'SEQUENCES',
+    'FUNCTION'  => 'FUNCTIONS', 'PROCEDURE'         => 'FUNCTIONS',
+    'ROUTINE'   => 'FUNCTIONS', 'AGGREGATE'         => 'FUNCTIONS',
+);
+
+sub adp_synthesize {
+    my ($ctx, $objtype, $key) = @_;
+    my $cat = $ADP_CATEGORY_OF{$objtype} or return;
+    my $schema = schema_of(key_identity($key));
+    return unless defined $schema && $ctx->{adp}{$schema}{$cat};
+    add_key($ctx, "acl:$key");
+}
+
+# ALTER DEFAULT PRIVILEGES ... IN SCHEMA s { GRANT | REVOKE } ... ON <category>
+sub handle_adp {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+
+    my ($schemas, $op) = $t =~ /\bIN\s+SCHEMA\s+(.+?)\s+(GRANT|REVOKE)\b/is;
+    return err($ctx, $st, 'unparsable ALTER DEFAULT PRIVILEGES') unless defined $schemas;
+    my ($cat) = $t =~ /\bON\s+(TABLES|SEQUENCES|FUNCTIONS|ROUTINES|TYPES)\b/i;
+    # ON SCHEMAS is the remaining category, and it does not fit this model at
+    # all: it grants on schemas the role creates later, anywhere, and cannot be
+    # scoped with IN SCHEMA.
+    return err($ctx, $st, 'unhandled ALTER DEFAULT PRIVILEGES category') unless defined $cat;
+    $cat = uc $cat;
+    $cat = 'FUNCTIONS' if $cat eq 'ROUTINES';
+
+    my @schemas = object_list($schemas);
+    return err($ctx, $st, 'ALTER DEFAULT PRIVILEGES names no schema') unless @schemas;
+    for my $s (@schemas) {
+        my $n = norm_name($s);
+        # A REVOKE has to clear the flag, or later creates keep being credited
+        # with a default privilege that is no longer in force -- the one way
+        # this model could hide a genuinely missing grant.
+        uc($op) eq 'GRANT' ? ($ctx->{adp}{$n}{$cat} = 1) : (delete $ctx->{adp}{$n}{$cat});
+    }
+    return;
+}
+
+# --- ALTER -----------------------------------------------------------------
+
+sub handle_alter {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+
+    return handle_adp($ctx, $st) if $t =~ /\AALTER\s+DEFAULT\s+PRIVILEGES\b/i;
+
+    return err($ctx, $st, "ALTER of global state is not allowed in an extension script")
+        if $t =~ /\AALTER\s+(?:SYSTEM|DATABASE|TABLESPACE|SUBSCRIPTION|LARGE\s+OBJECT)\b/i
+        || $t =~ /\AALTER\s+ROLE\b.*\bSET\b/is;
+
+    if ($t =~ /\AALTER\s+EXTENSION\s+/i) {
+        my $rest = $t;
+        $rest =~ s/\AALTER\s+EXTENSION\s+//i;
+        take_name(\$rest);
+        return err($ctx, $st, 'unparsable ALTER EXTENSION')
+            unless $rest =~ s/\A\s*(ADD|DROP)\s+//i;
+        my $op      = uc $1;
+        my $objtype = take_objtype(\$rest);
+        return err($ctx, $st, 'unparsable ALTER EXTENSION') unless defined $objtype;
+        return if reject_objtype($ctx, $st, "ALTER EXTENSION $op", $objtype);
+        my $key = member_key($objtype, \$rest);
+        return err($ctx, $st, 'unparsable ALTER EXTENSION') unless defined $key;
+        return err($ctx, $st, 'ALTER EXTENSION ADD needs an argument list')
+            if $op eq 'ADD' && $key =~ m{/\*\z};
+        key_op($ctx, $op, $key);
+        return;
+    }
+
+    my $rest = $t;
+    $rest =~ s/\AALTER\s+//i;
+    my $objtype = take_objtype(\$rest);
+    return err($ctx, $st, 'unrecognized ALTER') unless defined $objtype;
+    return if reject_objtype($ctx, $st, 'ALTER', $objtype);
+    $rest =~ s/\A\s*(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?//i;
+
+    my $kind = kind_of($objtype);
+    my $name;
+    my $arity;
+    if ($kind eq 'function' || $kind eq 'aggregate') {
+        $name  = take_name(\$rest);
+        $arity = arity_of_args(take_paren_group(\$rest));
+    }
+    else {
+        $name = take_name(\$rest);
+    }
+    return err($ctx, $st, "unparsable ALTER $objtype") unless defined $name;
+    my $self = defined $arity ? "$kind:$name/$arity" : "$kind:$name";
+
+    if ($objtype eq 'TYPE' && $rest =~ /\A\s*ADD\s+VALUE\b/i) {
+        # The only way an update script can add an enum value, versus the
+        # install script's CREATE TYPE ... AS ENUM(...). Both must normalize to
+        # the same enumval key or enum coverage means nothing.
+        $rest =~ s/\A\s*ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?//i;
+        my ($label) = enum_labels("($rest)");
+        return err($ctx, $st, 'unparsable ALTER TYPE ... ADD VALUE')
+            unless defined $label;
+        add_key($ctx, "enumval:$name:$label");
+        return;
+    }
+    if ($objtype eq 'TYPE' && $rest =~ /\A\s*RENAME\s+VALUE\b/i) {
+        my @l = enum_labels("($rest)");
+        return err($ctx, $st, 'unparsable ALTER TYPE ... RENAME VALUE') unless @l == 2;
+        del_key($ctx, "enumval:$name:$l[0]");
+        add_key($ctx, "enumval:$name:$l[1]");
+        return;
+    }
+    # ADD COLUMN takes IF NOT EXISTS, DROP COLUMN takes IF EXISTS, and either
+    # unstripped would be captured as the column's own name.
+    my $if_exists = qr/(?:IF\s+(?:NOT\s+)?EXISTS\s+)?/i;
+
+    if ($rest =~ /\A\s*(ADD|DROP)\s+ATTRIBUTE\s+$if_exists($IDENT)/i) {
+        key_op($ctx, $1, "attr:$name." . norm_name($2));
+        return;
+    }
+    # Ahead of the column branch below, whose COLUMN keyword is optional and
+    # would otherwise swallow the word CONSTRAINT as a column name.
+    if ($rest =~ /\A\s*(ADD|DROP)\s+CONSTRAINT\s+$if_exists($IDENT)/i) {
+        key_op($ctx, $1, "constraint:$name." . norm_name($2));
+        return;
+    }
+    if ($rest =~ /\A\s*(ADD|DROP)\s+(?:COLUMN\s+)?$if_exists($IDENT)/i
+        && $objtype eq 'TABLE')
+    {
+        key_op($ctx, $1, "attr:$name." . norm_name($2));
+        return;
+    }
+    if ($rest =~ /\A\s*ALTER\s+(?:COLUMN\s+)?(?!CONSTRAINT\b)($IDENT)/i && $objtype eq 'TABLE') {
+        touch_key($ctx, "attr:$name." . norm_name($1));
+        return;
+    }
+    if ($rest =~ /\A\s*RENAME\s+TO\s+($QNAME)/i) {
+        my $new = norm_name($1);
+        # RENAME takes an unqualified new name; keep the original schema.
+        my $sch = schema_of($name);
+        $new = "$sch.$new" if defined $sch && $new !~ /\./;
+        del_key($ctx, $self);
+        add_key($ctx, defined $arity ? "$kind:$new/$arity" : "$kind:$new");
+        return;
+    }
+    if ($rest =~ /\A\s*(?:OWNER\s+TO|SET\s+SCHEMA)\b/i) {
+        touch_key($ctx, $self);
+        return;
+    }
+    return err($ctx, $st, "unrecognized ALTER $objtype");
+}
+
+# --- DROP ------------------------------------------------------------------
+
+# Read one object reference of type $objtype from $$ref and return its key.
+sub member_key {
+    my ($objtype, $ref) = @_;
+    my $kind = kind_of($objtype);
+    if ($objtype eq 'CAST') {
+        my $group = take_paren_group($ref);
+        return undef unless defined $group && $group =~ /\A\s*($QNAME)\s+AS\s+($QNAME)\s*\z/i;
+        return 'cast:' . norm_name($1) . '=>' . norm_name($2);
+    }
+    my $name = take_name($ref);
+    return undef unless defined $name;
+    if ($kind eq 'function' || $kind eq 'aggregate') {
+        my $group = take_paren_group($ref);
+        # PostgreSQL accepts a bare routine name only where it is unambiguous,
+        # and then means whichever arity exists. `/*` carries that "any arity"
+        # sense through to cancellation and coverage; a form that needs a real
+        # signature rejects it instead of pretending the arity is zero.
+        return "$kind:$name/" . (defined $group ? arity_of_args($group) : '*');
+    }
+    return "$kind:$name";
+}
+
+# The non-blank pieces of a comma-separated object list. An empty result is a
+# handler's cue to fail: a DDL-shaped fragment assembled at run time --
+# `'GRANT USAGE ON SCHEMA ' || quote_ident(s)` -- parses as a statement whose
+# object list is entirely gone, and a handler that just loops over the pieces
+# records nothing and returns clean.
+sub object_list {
+    my ($s) = @_;
+    return grep { /\S/ } split_top_commas($s);
+}
+
+# True if $key names any arity of a routine rather than one signature.
+sub is_wildcard_key { my ($k) = @_; return $k =~ m{/\*\z} }
+
+# Every key in %$set that $key names, expanding an "any arity" wildcard on
+# either side. Exact match is the common case and stays a single hash lookup.
+sub matching_keys {
+    my ($set, $key) = @_;
+    return ($key) if $set->{$key};
+    if (is_wildcard_key($key)) {
+        my ($stem) = $key =~ m{\A(.*)/\*\z};
+        return grep { m{\A\Q$stem\E/\d+\z} } keys %$set;
+    }
+    my ($stem) = $key =~ m{\A(.*)/\d+\z};
+    return () unless defined $stem;
+    return $set->{"$stem/*"} ? ("$stem/*") : ();
+}
+
+sub handle_drop {
+    my ($ctx, $st) = @_;
+    my $rest = $st->{text};
+    return err($ctx, $st, 'DROP OWNED is not allowed in an extension script')
+        if $rest =~ /\ADROP\s+OWNED\b/i;
+    $rest =~ s/\ADROP\s+//i;
+
+    my $objtype = take_objtype(\$rest);
+    return err($ctx, $st, 'unrecognized DROP') unless defined $objtype;
+    return if reject_objtype($ctx, $st, 'DROP', $objtype);
+
+    $rest =~ s/\A\s*CONCURRENTLY\s*//i;
+    $rest =~ s/\A\s*IF\s+EXISTS\s*//i;
+    my $cascade = $rest =~ s/\s*\bCASCADE\s*\z//i ? 1 : 0;
+    $rest =~ s/\s*\bRESTRICT\s*\z//i;
+
+    # Set difference over parsed DROP keys, not a regex over the text: the
+    # multi-line `DROP FUNCTION name(\n arg\n , arg\n)` form used throughout
+    # this repo defeats any line-oriented match.
+    my @pieces = object_list($rest);
+    return err($ctx, $st, "DROP $objtype names no object") unless @pieces;
+    for my $piece (@pieces) {
+        my $p   = $piece;
+        my $key = member_key($objtype, \$p);
+        return err($ctx, $st, "unparsable DROP $objtype") unless defined $key;
+        del_key($ctx, $key, $cascade);
+    }
+    return;
+}
+
+# --- GRANT / REVOKE --------------------------------------------------------
+
+my @ACL_OBJ_TYPES = (
+    'ALL TABLES IN SCHEMA', 'ALL SEQUENCES IN SCHEMA', 'ALL FUNCTIONS IN SCHEMA',
+    'ALL PROCEDURES IN SCHEMA', 'ALL ROUTINES IN SCHEMA',
+    'FOREIGN DATA WRAPPER', 'FOREIGN SERVER', 'LARGE OBJECT',
+    'TABLE', 'SEQUENCE', 'DATABASE', 'DOMAIN', 'FUNCTION', 'PROCEDURE',
+    'ROUTINE', 'LANGUAGE', 'PARAMETER', 'SCHEMA', 'TABLESPACE', 'TYPE',
+);
+
+# GRANT and REVOKE are treated symmetrically: both are recorded as "this
+# object's ACL is touched here". A presence key, not a privilege model -- the
+# question this check answers is whether the update script did anything at all
+# about an object whose ACL differs between the two installs.
+sub handle_acl {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+    my (undef, $masked, $depth) = scan($t);
+
+    my $on = kw_pos($masked, $depth, qr/\bON\b/i, 0);
+    if (!defined $on) {
+        # GRANT role TO role / REVOKE role FROM role: role membership.
+        my $sep = kw_pos($masked, $depth, qr/\b(?:TO|FROM)\b/i, 0);
+        return err($ctx, $st, 'unparsable GRANT/REVOKE') unless defined $sep;
+        my $roles = substr($t, 0, $sep);
+        $roles =~ s/\A\s*(?:GRANT|REVOKE)\s+//i;
+        my $grantees = substr($t, $sep);
+        $grantees =~ s/\A\s*(?:TO|FROM)\s+//i;
+        $grantees =~ s/\s*\bWITH\b.*\z//is;
+        my @roles    = object_list($roles);
+        my @grantees = object_list($grantees);
+        return err($ctx, $st, 'GRANT/REVOKE names no role')
+            unless @roles && @grantees;
+        for my $r (@roles) {
+            for my $g (@grantees) {
+                add_key($ctx, 'rolegrant:' . norm_name($r) . ':' . norm_name($g));
+            }
+        }
+        return;
+    }
+
+    my $rest = substr($t, $on);
+    $rest =~ s/\A\s*ON\s+//i;
+    my $objtype = 'TABLE';
+    for my $ot (@ACL_OBJ_TYPES) {
+        my $re = phrase_re($ot);
+        if ($rest =~ s/\A$re\b//i) { $objtype = $ot; last }
+    }
+
+    my @pieces = object_list(strip_grantees($rest));
+    return err($ctx, $st, "GRANT/REVOKE ON $objtype names no object") unless @pieces;
+
+    if ($objtype =~ /\AALL\s+(\w+)\s+IN\s+SCHEMA\z/i) {
+        my $what = lc $1;
+        add_key($ctx, "acl:all_$what:" . norm_name($_)) for @pieces;
+        return;
+    }
+
+    my $kind = kind_of($objtype);
+    for my $piece (@pieces) {
+        my $p    = $piece;
+        my $name = take_name(\$p);
+        return err($ctx, $st, 'unparsable GRANT/REVOKE object') unless defined $name;
+        if ($kind eq 'function' || $kind eq 'aggregate') {
+            my $group = take_paren_group(\$p);
+            # See member_key on what `/*` means; an ACL key without an arity at
+            # all could never meet the `<name>/<arity>` key a CREATE produces.
+            $name .= '/' . (defined $group ? arity_of_args($group) : '*');
+        }
+        add_key($ctx, "acl:$kind:$name");
+    }
+    return;
+}
+
+sub strip_grantees {
+    my ($s) = @_;
+    my (undef, $masked, $depth) = scan($s);
+    my $p = kw_pos($masked, $depth, qr/\b(?:TO|FROM)\b/i, 0);
+    return defined $p ? substr($s, 0, $p) : $s;
+}
+
+# Offset of the first match of $re in $masked at nesting depth $want. Searching
+# the masked copy is what keeps a TO/FROM/IS inside a string literal or comment
+# from being mistaken for the real clause separator.
+sub kw_pos {
+    my ($masked, $depth, $re, $want) = @_;
+    while ($masked =~ /$re/g) {
+        my $p = $-[0];
+        return $p if $depth->[$p] == $want;
+    }
+    return undef;
+}
+
+# --- COMMENT / SECURITY LABEL ----------------------------------------------
+
+sub handle_comment { return handle_annotation(@_, 'comment', qr/\ACOMMENT\s+ON\s+/i) }
+
+sub handle_seclabel {
+    my ($ctx, $st) = @_;
+    return handle_annotation($ctx, $st, 'seclabel',
+        qr/\ASECURITY\s+LABEL\s+(?:FOR\s+$IDENT\s+)?ON\s+/i);
+}
+
+sub handle_annotation {
+    my ($ctx, $st, $prefix, $head) = @_;
+    my $rest = $st->{text};
+    return err($ctx, $st, "unparsable \U$prefix") unless $rest =~ s/$head//;
+    my $objtype = take_objtype(\$rest);
+    return err($ctx, $st, "unrecognized \U$prefix\E target") unless defined $objtype;
+    return if reject_objtype($ctx, $st, "\U$prefix\E ON", $objtype);
+
+    my (undef, $masked, $depth) = scan($rest);
+    my $is = kw_pos($masked, $depth, qr/\bIS\b/i, 0);
+    $rest = substr($rest, 0, $is) if defined $is;
+
+    my $kind = kind_of($objtype);
+    my $p    = $rest;
+    my $key  = member_key($objtype, \$p);
+    return err($ctx, $st, "unparsable \U$prefix") unless defined $key;
+    return err($ctx, $st, "\U$prefix\E ON $objtype needs an argument list")
+        if is_wildcard_key($key);
+    $key =~ s/\A[^:]+://;
+    add_key($ctx, "$prefix:$kind:$key");
+    return;
+}
+
+# --- Data statements -------------------------------------------------------
+
+# Advisory only. bin/structural_diff compares structure, never table CONTENTS,
+# so a seeded table is invisible to the runtime check as well; recording which
+# tables an install script writes lets the report point out that the update
+# script writes none of them.
+sub handle_data {
+    my ($ctx, $st) = @_;
+    my $t    = $st->{text};
+    my $rest = $t;
+    $rest =~ s/\A(?:INSERT\s+INTO|DELETE\s+FROM|MERGE\s+INTO|UPDATE|TRUNCATE(?:\s+TABLE)?|COPY)\s+//i
+        or return err($ctx, $st, 'unparsable data statement');
+    $rest =~ s/\A\s*ONLY\s+//i;
+    my $name = take_name(\$rest);
+    return err($ctx, $st, 'unparsable data statement') unless defined $name;
+    my $norm = $t;
+    $norm =~ s/\s+/ /g;
+    $ctx->{data}{"data:$name"} .= "$norm\n";
+    add_key($ctx, "data:$name");
+    return;
+}
+
+# --- Dynamic SQL gateways --------------------------------------------------
+#
+# A dollar-quoted string is DDL only when it is reached through one of exactly
+# three constructs. Blanket-skipping dollar quotes would lose the views and the
+# role this extension builds dynamically; blanket-scanning them would invent
+# phantom objects out of the format() templates stored in function bodies. The
+# discriminator is the construct, not the content.
+
+sub handle_select {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+
+    if ($t =~ /\ASELECT\s+(?:__cat_tools|pg_temp)\s*\.\s*create_function\s*(?=\()/i) {
+        my $rest = $t;
+        $rest =~ s/\ASELECT\s+(?:__cat_tools|pg_temp)\s*\.\s*create_function\s*//i;
+        my $group = take_paren_group(\$rest);
+        return err($ctx, $st, 'unparsable create_function() call') unless defined $group;
+        return gateway_create_function($ctx, $st, $group);
+    }
+    if ($t =~ /\ASELECT\s+(?:__cat_tools|pg_temp)\s*\.\s*exec\s*(?=\()/i) {
+        return err($ctx, $st, 'exec() payload does not resolve to any DDL')
+            unless gateway_literals($ctx, $st->{offset}, $t);
+        return;
+    }
+    # Every top-level SELECT in this extension is one of the two helpers above.
+    # Rejecting the rest also catches SELECT ... INTO, which silently creates a
+    # table.
+    return err($ctx, $st, 'unrecognized top-level SELECT');
+}
+
+# The helper's arguments are positional, so the object it will create is read
+# off them directly. Argument 3 is the new function's BODY: data, never scanned
+# -- that is where the format() templates live.
+#
+# The count is bounded on both sides because everything below is positional: a
+# call with the wrong number of arguments does not fail here, it silently reads
+# the wrong argument as the name, the signature or the comment.
+sub gateway_create_function {
+    my ($ctx, $st, $group) = @_;
+    my @args = split_top_commas($group);
+    return err($ctx, $st, 'create_function() takes 4 to 6 arguments')
+        if @args < 4 || @args > 6;
+
+    my $name = literal_value($args[0]);
+    my $args_txt = literal_value($args[1]);
+    return err($ctx, $st, 'create_function() name is not a literal') unless defined $name;
+    return err($ctx, $st, 'create_function() argument list is not a literal')
+        unless defined $args_txt;
+
+    $name = norm_name($name);
+    my $sig = "$name/" . arity_of_args($args_txt);
+    add_key($ctx, "function:$sig");
+    # The helper always emits REVOKE ALL ... FROM public, and a GRANT EXECUTE
+    # when argument 5 is non-NULL; either way the function's ACL is set here.
+    add_key($ctx, "acl:function:$sig");
+    add_key($ctx, "comment:function:$sig")
+        if defined $args[5] && $args[5] =~ /\S/ && $args[5] !~ /\A\s*NULL\s*\z/i;
+    return;
+}
+
+# Whether a resolved payload is DDL, decided on the COMMENT-STRIPPED text: a
+# template that opens with an explanatory `--` or `/* */` is still DDL, and
+# reading the raw text would drop the whole statement on the floor.
+sub is_ddl_text {
+    my ($s) = @_;
+    my ($code) = scan($s);
+    return $code =~ /\A\s*(?:CREATE|ALTER|DROP|GRANT|REVOKE|COMMENT|SECURITY\s+LABEL)\b/i;
+}
+
+# Offset ranges covering every format() argument after the first. Only that
+# first argument is a template; the rest are VALUES substituted into it, and a
+# value that happens to open with a DDL keyword ('DROP TABLE s.t' passed for a
+# %s) is data, not a statement -- parsing it would cancel a real object.
+sub format_value_ranges {
+    my ($t) = @_;
+    my (undef, $masked, $depth) = scan($t);
+    my $n = length $t;
+    my @out;
+    while ($masked =~ /\bformat\s*\(/gi) {
+        my $open = $+[0] - 1;
+        my $d    = $depth->[$open];
+        # scan() gives a '(' and its matching ')' the same depth, so the first
+        # ')' at $d after $open closes this call.
+        my ($close, $comma);
+        for (my $i = $open + 1 ; $i < $n ; $i++) {
+            my $c = substr($masked, $i, 1);
+            if ($c eq ')' && $depth->[$i] == $d) { $close = $i; last }
+            $comma = $i if $c eq ',' && $depth->[$i] == $d + 1 && !defined $comma;
+        }
+        push @out, [ $comma + 1, $close ] if defined $close && defined $comma;
+    }
+    return @out;
+}
+
+# Parse every string literal in $t that resolves to DDL, and return how many
+# there were. A caller that reached here through a gateway construct treats
+# zero as an error: whatever that gateway executes at run time, this did not
+# read it, and an unread gateway is exactly the blind spot to avoid.
+sub gateway_literals {
+    my ($ctx, $base, $t) = @_;
+    my ($code, undef, undef, $lits) = scan($t);
+    my @values = format_value_ranges($t);
+    my $found  = 0;
+    for my $l (@$lits) {
+        next if grep { $l->[0] >= $_->[0] && $l->[0] < $_->[1] } @values;
+        my $v = substr($code, $l->[0], $l->[1] - $l->[0]);
+        $v =~ s/''/'/g if $l->[2] eq "'";
+        next unless is_ddl_text($v);
+        process_sql($ctx, $v, $base + $l->[0]);
+        $found++;
+    }
+    return $found;
+}
+
+# --- DO blocks -------------------------------------------------------------
+#
+# A DO block is a gateway too, so its body is parsed rather than skipped, and a
+# form the parse does not understand is an error: the statement it declined to
+# read could be the one creating an object.
+#
+# The body is split into statements exactly as top-level text is, then each
+# statement has its leading control constructs peeled off. BEGIN, IF ... THEN
+# and their relatives are PREFIXES of the statement they guard rather than
+# statements of their own, so the DDL that follows one shares its statement --
+# which is why the peel is needed and why keying off line starts is not enough.
+# What survives the peel is either a plpgsql statement with no catalog effect,
+# or a statement handed to the same process_stmt() as top-level text.
+
+# Peeled off the front of a statement until none matches, appending everything
+# taken to $$seen so the caller can vet it. Returns false if a construct is
+# opened but its terminator (THEN, LOOP) is missing, which means the peel would
+# otherwise consume the statement it was looking for.
+sub peel_plpgsql_control {
+    my ($ref, $seen) = @_;
+    while (1) {
+        $$ref =~ s/\A\s+//;
+        if ($$ref =~ s/\A(BEGIN|ELSE|LOOP)\b//i) { $$seen .= $1; next }
+        my $terminator =
+              $$ref =~ /\A(?:IF|ELSIF|ELSEIF|CASE|WHEN|EXCEPTION\s+WHEN)\b/i ? 'THEN'
+            : $$ref =~ /\A(?:WHILE|FOR|FOREACH)\b/i                          ? 'LOOP'
+            :                                                                  undef;
+        return 1 unless defined $terminator;
+        my (undef, $masked, $depth) = scan($$ref);
+        my $p = kw_pos($masked, $depth, qr/\b\Q$terminator\E\b/i, 0);
+        return 0 unless defined $p;
+        my $take = $p + length $terminator;
+        $$seen .= substr($$ref, 0, $take);
+        $$ref = substr($$ref, $take);
+    }
+}
+
+# A control header is an expression, not a statement, so it may not carry DDL
+# or reach a dynamic-SQL gateway. Matched against the header's MASKED text --
+# a DDL keyword inside a string literal there is a value, and the gateway that
+# would execute it is the thing worth finding.
+my $HEADER_HAZARD = qr/
+    \b(?:CREATE|ALTER|DROP|GRANT|REVOKE|EXECUTE|PERFORM)\b
+  | \bCOMMENT\s+ON\b | \bSECURITY\s+LABEL\b
+  | \b(?:__cat_tools|pg_temp)\s*\.\s*(?:exec|create_function)\b
+/xi;
+
+# plpgsql statements that cannot reach the catalog. EXECUTE and PERFORM are
+# deliberately absent: both run something this script has to look inside.
+my $INERT_PLPGSQL = qr/\A(?:END|NULL|RETURN|RAISE|ASSERT|CONTINUE|EXIT|GET)\b/i;
+
+sub handle_do {
+    my ($ctx, $st) = @_;
+    my $t = $st->{text};
+    my ($code, undef, undef, $lits) = scan($t);
+    return err($ctx, $st, 'unparsable DO block') unless @$lits;
+    my ($cs, $ce) = @{ $lits->[0] };
+    my $body = substr($code, $cs, $ce - $cs);
+    my $base = $st->{offset} + $cs;
+
+    # A top-level DECLARE section runs to the block's BEGIN. Its contents are
+    # variable declarations, which no amount of them can turn into an object,
+    # and they are `;`-separated, so they are cut out ahead of the split rather
+    # than left to fail statement by statement. A DECLARE on a NESTED block is
+    # not recognized and reports itself as unhandled.
+    if ($body =~ /\A\s*DECLARE\b/i) {
+        my (undef, $masked, $depth) = scan($body);
+        my $p = kw_pos($masked, $depth, qr/\bBEGIN\b/i, 0);
+        return err($ctx, $st, 'DECLARE section with no BEGIN') unless defined $p;
+        $body = (' ' x $p) . substr($body, $p);
+    }
+
+    for my $chunk (@{ checked_stmts($ctx, $body, $base) }) {
+        do_stmt($ctx, $chunk);
+    }
+    return;
+}
+
+sub do_stmt {
+    my ($ctx, $st) = @_;
+    my $text   = $st->{text};
+    my $header = '';
+    return err($ctx, $st, 'unterminated plpgsql control construct')
+        unless peel_plpgsql_control(\$text, \$header);
+    my (undef, $header_masked) = scan($header);
+    return err($ctx, $st, 'plpgsql control header carries DDL or a dynamic-SQL gateway')
+        if $header_masked =~ /$HEADER_HAZARD/;
+    return unless $text =~ /\S/;
+
+    # The peel only removes a prefix, so the length it took off is how far the
+    # reported line has to move to land on the guarded statement rather than on
+    # the IF or BEGIN in front of it.
+    $st = { text   => $text,
+            offset => $st->{offset} + length($st->{text}) - length($text) };
+
+    return if $text =~ /$INERT_PLPGSQL/;
+
+    # EXECUTE and PERFORM both run something built elsewhere. PERFORM is a
+    # SELECT with its result thrown away, so it gets the SELECT rules --
+    # including the refusal to guess at a function call that is not a known
+    # gateway.
+    if ($text =~ /\AEXECUTE\b/i) {
+        return err($ctx, $st, 'EXECUTE payload does not resolve to any DDL')
+            unless gateway_literals($ctx, $st->{offset}, $text);
+        return;
+    }
+    if ($text =~ s/\APERFORM\b/SELECT/i) {
+        return handle_select($ctx, { %$st, text => $text });
+    }
+    return process_stmt($ctx, $st);
+}
+
+# ---------------------------------------------------------------------------
+# File handling
+# ---------------------------------------------------------------------------
+
+# sql.mk rewrites the bare @generated@ marker into a -- comment on its way to
+# the generated .sql; doing the identical substitution here is what makes the
+# marker inert without special-casing it in the scanner.
+#
+#
+# The version-conditional `-- SED: REQUIRES N!` / `-- SED: PRIOR TO N!` markers
+# get the same treatment, resolved as sql.mk resolves them for the newest
+# PostgreSQL: the REQUIRES branch is left alone and the PRIOR TO branch becomes
+# a comment. See the header's LIMITATIONS for why that branch and what it costs.
+sub preprocess {
+    my ($text) = @_;
+    $text =~ s/\@generated\@/-- GENERATED FILE! DO NOT EDIT!/g;
+    $text =~ s/^(.*)-- SED: PRIOR TO ([^!\n]*)!/-- Not used prior to $2: $1/gm;
+    return $text;
+}
+
+sub read_file {
+    my ($path) = @_;
+    open my $fh, '<', $path
+        or usage_error("cannot read $path: $!");
+    # A directory opens and then reads as the empty string, so a mistyped path
+    # would otherwise come out as a clean run over no objects at all. This
+    # cannot be a plain -f test: /dev/null is a documented argument.
+    usage_error("$path is not a plain file") unless -f $fh || -c $fh;
+    local $/;
+    my $t = <$fh>;
+    close $fh;
+    return defined $t ? $t : '';
+}
+
+# Object keys $key hangs off. Dropping an object takes its enum labels, ACL,
+# comment, columns and constraints with it -- otherwise a file that created and
+# then dropped a type is left claiming an ACL on something that never survived.
+#
+# Ownership is read off the key shapes; there is no separate dependency graph.
+# Where a key shape is ambiguous (a constraint hangs off a table OR a domain)
+# both candidates are returned: at most one of them is ever a real key.
+sub owner_keys {
+    my ($key) = @_;
+    my $kind = key_kind($key);
+    my $id   = key_identity($key);
+    my @owners;
+
+    if ($kind =~ /\A(?:acl|comment|seclabel)\z/) {
+        push @owners, $id if $id =~ /\A[a-z_]+:/;
+    }
+    elsif ($kind eq 'enumval') {
+        push @owners, "type:$1" if $id =~ /\A(.*):[^:]*\z/s;
+    }
+    elsif ($kind eq 'constraint' || $kind eq 'attr') {
+        push @owners, "relation:$1", "type:$1" if $id =~ /\A(.*)\.[^.]+\z/;
+    }
+    elsif ($kind eq 'data')      { push @owners, "relation:$id" }
+    elsif ($kind eq 'cast')      { push @owners, map { "type:$_" } split /=>/, $id, 2 }
+    elsif ($kind eq 'rolegrant') { push @owners, map { "role:$_" } split /:/, $id, 2 }
+
+    # A schema owns everything in it. Only reached for a CASCADE drop, which is
+    # the only DROP SCHEMA that can run against a non-empty schema at all.
+    my $obj = @owners && $owners[0] =~ /\A[a-z_]+:/ ? key_identity($owners[0]) : $id;
+    push @owners, "schema:$1" if $kind ne 'schema' && $obj =~ /\A([^.:]+)\./;
+
+    return @owners;
+}
+
+sub parse_file {
+    my ($path, $seed_adp) = @_;
+    my $src = preprocess(read_file($path));
+    my $ctx = new_ctx(path => $path, seed_adp => $seed_adp);
+
+    # Line numbers are resolved from the offset each statement carries, using
+    # one precomputed index of newline positions.
+    my @nl;
+    my $p = -1;
+    push @nl, $p while ($p = index($src, "\n", $p + 1)) >= 0;
+    $ctx->{line_of} = sub {
+        my ($off) = @_;
+        my ($lo, $hi) = (0, scalar @nl);
+        while ($lo < $hi) {
+            my $mid = int(($lo + $hi) / 2);
+            $nl[$mid] < $off ? ($lo = $mid + 1) : ($hi = $mid);
+        }
+        return $lo + 1;
+    };
+
+    process_sql($ctx, $src, 0);
+
+    # Scaffolding cancellation: an object created and then dropped inside the
+    # same file never existed as far as a later version is concerned. This is
+    # what removes the __cat_tools helper schema and its functions without a
+    # hardcoded name list -- and it only works because a DROP derives a
+    # byte-identical key to its CREATE.
+    #
+    # ORDER decides it, which is why the keys carry sequence numbers: the same
+    # pair of statements is scaffolding one way round and an idempotent rebuild
+    # (`DROP VIEW IF EXISTS v; CREATE VIEW v ...`) the other, and cancelling a
+    # rebuilt object would lose it from the diff entirely.
+    #
+    # %removed_at holds the last time each key was destroyed. A key whose most
+    # recent CREATE is later than that survives. A DROP of something this file
+    # never created still gets an entry, because whatever hangs off it was
+    # destroyed too.
+    my %removed_at;
+    my $remove_at = sub {
+        my ($k, $t) = @_;
+        return if defined $removed_at{$k} && $removed_at{$k} >= $t;
+        $removed_at{$k} = $t;
+        return 1;
+    };
+    for my $d (keys %{ $ctx->{dropped} }) {
+        my $t = $ctx->{dropped}{$d};
+        $remove_at->($_, $t) for matching_keys($ctx->{created}, $d), $d;
+    }
+
+    # Dependents go down with their owner (see owner_keys), but only those that
+    # existed when it was dropped. This runs to a fixed point rather than in one
+    # pass: an enum label is reached through its type, which may itself be
+    # reached through its schema.
+    my $reached = 1;
+    while ($reached) {
+        $reached = 0;
+        for my $k (keys %{ $ctx->{created} }) {
+            for my $o (owner_keys($k)) {
+                my $t = $removed_at{$o};
+                next unless defined $t && $t > $ctx->{created}{$k};
+                next if key_kind($o) eq 'schema' && !$ctx->{cascade}{$o};
+                $reached = 1 if $remove_at->($k, $t);
+            }
+        }
+    }
+
+    my %objects = map { $_ => 1 }
+        grep { !defined $removed_at{$_} || $ctx->{created}{$_} > $removed_at{$_} }
+        keys %{ $ctx->{created} };
+    $ctx->{objects} = \%objects;
+    return $ctx;
+}
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+sub key_kind     { my ($k) = @_; my ($a) = $k =~ /\A([^:]+):/; return $a }
+sub key_identity { my ($k) = @_; my ($a) = $k =~ /\A[^:]+:(.*)\z/s; return $a }
+
+sub usage {
+    print STDERR <<"END";
+usage: $PROG [OPTIONS]
+       $PROG OLD_INSTALL NEW_INSTALL UPDATE_SCRIPT
+       $PROG --versions OLD NEW
+       $PROG --list-objects FILE
+
+  With no arguments, lints the highest tracked released install snapshot
+  against the current source, using the update script between them.
+
+  --sql-dir DIR   directory holding the versioned SQL (default: sql)
+  --ext NAME      extension name (default: cat_tools)
+  -h, --help      this message
+
+  Exit: 0 clean, 1 gaps found, 2 usage error, 3 unanalyzable input.
+END
+    exit 2;
+}
+
+sub usage_error {
+    my ($msg) = @_;
+    print STDERR "$PROG: $msg\n";
+    exit 2;
+}
+
+# ---------------------------------------------------------------------------
+# Path and version resolution
+# ---------------------------------------------------------------------------
+
+# Prefer the tracked .sql.in source; fall back to a plain .sql, which is how
+# pre-0.2.0 versions are tracked.
+sub resolve_stem {
+    my ($stem) = @_;
+    return "$stem.sql.in" if -e "$stem.sql.in";
+    return "$stem.sql"    if -e "$stem.sql";
+    return undef;
+}
+
+sub vercmp {
+    my ($a, $b) = @_;
+    my @a = split /\./, $a;
+    my @b = split /\./, $b;
+    while (@a || @b) {
+        my $x = shift(@a);
+        my $y = shift(@b);
+        $x = 0 unless defined $x;
+        $y = 0 unless defined $y;
+        my $c = ($x =~ /\A\d+\z/ && $y =~ /\A\d+\z/) ? $x <=> $y : $x cmp $y;
+        return $c if $c;
+    }
+    return 0;
+}
+
+# default_version out of the .control file. Mirrors the tolerant parse in
+# pgxntool/control.mk.sh: strip a trailing # comment, then the quotes.
+sub control_default_version {
+    my ($path) = @_;
+    open my $fh, '<', $path
+        or usage_error("cannot read $path (default mode must run from the extension root)");
+    my $v;
+    while (my $l = <$fh>) {
+        chomp $l;
+        next unless $l =~ /\A\s*default_version\s*=\s*(.*)\z/;
+        my $raw = $1;
+        $raw =~ s/#.*\z//;
+        $raw =~ s/\A\s+//;
+        $raw =~ s/\s+\z//;
+        $raw =~ s/\A'(.*)'\z/$1/ or $raw =~ s/\A"(.*)"\z/$1/;
+        $v = $raw;
+        last;
+    }
+    close $fh;
+    usage_error("no default_version in $path") unless defined $v && length $v;
+    return $v;
+}
+
+# Highest tracked install snapshot under $dir, excluding the pseudo-version
+# named by the control file's default_version (it is regenerated, not tracked).
+sub highest_released {
+    my ($dir, $ext, $exclude) = @_;
+    opendir my $dh, $dir or usage_error("cannot read directory $dir: $!");
+    my %seen;
+    for my $f (readdir $dh) {
+        # The version pattern admits a single dash but never two, which is what
+        # keeps <ext>--<from>--<to> update scripts out.
+        next unless $f =~ /\A\Q$ext\E--([^-]+(?:-[^-]+)*)\.sql(?:\.in)?\z/;
+        my $v = $1;
+        next if $v eq $exclude;
+        $seen{$v} = 1;
+    }
+    closedir $dh;
+    my @v = sort { vercmp($a, $b) } keys %seen;
+    usage_error("no released install script found in $dir") unless @v;
+    return $v[-1];
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+my $sql_dir = 'sql';
+my $ext     = 'cat_tools';
+my $mode_versions;
+my $list_objects;
+my @positional;
+
+while (@ARGV) {
+    my $a = shift @ARGV;
+    if    ($a eq '-h' || $a eq '--help') { usage() }
+    elsif ($a eq '--sql-dir') { $sql_dir = shift @ARGV // usage_error('--sql-dir needs a value') }
+    elsif ($a eq '--ext')     { $ext     = shift @ARGV // usage_error('--ext needs a value') }
+    elsif ($a eq '--versions') {
+        my $old = shift @ARGV;
+        my $new = shift @ARGV;
+        usage_error('--versions needs OLD and NEW') unless defined $old && defined $new;
+        $mode_versions = [ $old, $new ];
+    }
+    elsif ($a eq '--list-objects') {
+        $list_objects = shift @ARGV // usage_error('--list-objects needs a FILE');
+    }
+    elsif ($a =~ /\A-/) { usage_error("unknown option $a") }
+    else                { push @positional, $a }
+}
+
+if (defined $list_objects) {
+    usage_error('--list-objects takes no other arguments')
+        if @positional || $mode_versions;
+    my $ctx = parse_file($list_objects, {});
+    report_errors($ctx) if @{ $ctx->{errors} };
+    for my $k (sort keys %{ $ctx->{objects} }) {
+        print key_kind($k), "\t", key_identity($k), "\n";
+    }
+    exit 0;
+}
+
+usage_error('--versions and explicit file arguments are mutually exclusive')
+    if $mode_versions && @positional;
+usage() if @positional && @positional != 3;
+
+my ($old_path, $new_path, $upd_path, $label);
+
+if (@positional == 3) {
+    ($old_path, $new_path, $upd_path) = @positional;
+    for my $p ($old_path, $new_path, $upd_path) {
+        usage_error("cannot read $p") unless -e $p;
+    }
+}
+else {
+    my ($old_v, $new_v);
+    if ($mode_versions) {
+        ($old_v, $new_v) = @$mode_versions;
+        $old_path = resolve_stem("$sql_dir/$ext--$old_v")
+            or usage_error("no install script for $ext $old_v under $sql_dir");
+        $new_path = resolve_stem("$sql_dir/$ext--$new_v")
+            or usage_error("no install script for $ext $new_v under $sql_dir");
+    }
+    else {
+        my $default_version = control_default_version("$ext.control");
+        $old_v    = highest_released($sql_dir, $ext, $default_version);
+        $new_v    = $default_version;
+        $old_path = resolve_stem("$sql_dir/$ext--$old_v")
+            or usage_error("no install script for $ext $old_v under $sql_dir");
+        # The current version's source, NOT sql/<ext>--<default_version>.sql.in:
+        # that one is generated and gitignored, so it is absent before `make`.
+        # Resolved the same way as a versioned stem, because an extension with
+        # no .sql.in preprocessing step keeps its source in sql/<ext>.sql.
+        $new_path = resolve_stem("$sql_dir/$ext")
+            or usage_error("no current source $sql_dir/$ext.sql.in or $sql_dir/$ext.sql");
+    }
+    $upd_path = resolve_stem("$sql_dir/$ext--$old_v--$new_v");
+    if (!defined $upd_path) {
+        # Treated as empty rather than skipped: skipping would report success
+        # on precisely the omission this check exists to catch.
+        print "note: no update script $sql_dir/$ext--$old_v--$new_v.sql.in; treating it as empty\n";
+        $upd_path = '/dev/null';
+    }
+    $label = "$ext $old_v -> $new_v";
+}
+
+my $old = parse_file($old_path, {});
+my $new = parse_file($new_path, {});
+# The old database already ran the old install's ALTER DEFAULT PRIVILEGES, so
+# its effect is still in force while the update script runs. Without seeding,
+# every type the update script creates looks as though it never got its grant.
+my $upd = parse_file($upd_path, $old->{adp});
+
+report_errors($old, $new, $upd);
+
+sub report_errors {
+    my @ctxs = @_;
+    my @all = map { @{ $_->{errors} } } @ctxs;
+    return unless @all;
+    print STDERR "$_\n" for @all;
+    print STDERR "FAIL: "
+        . scalar(@all)
+        . " statement(s) could not be analyzed; update_lint cannot vouch for this pair\n";
+    exit 3;
+}
+
+# Data statements are advisory (see handle_data), so they are held out of the
+# gating diff.
+sub gating {
+    my ($ctx) = @_;
+    return { map { $_ => 1 } grep { !/\Adata:/ } keys %{ $ctx->{objects} } };
+}
+
+my $old_g = gating($old);
+my $new_g = gating($new);
+
+my @added   = sort grep { !$old_g->{$_} } keys %$new_g;
+my @removed = sort grep { !$new_g->{$_} } keys %$old_g;
+
+# Coverage is exact set membership over keys parsed out of the update script,
+# never a substring search over its text. `cat_tools.column` is a substring of
+# `_cat_tools.column`, and enum labels like 'in' or 'v' match almost anything.
+#
+# Note that extraction and coverage need OPPOSITE treatment of string literals:
+# an object's name lives INSIDE a literal when it is created through
+# create_function(), yet a name that appears only in a comment must not count.
+# Parsing the update script into the same keys is what gets both right; a text
+# scan cannot.
+#
+# Key kinds that record an object's EXISTENCE are covered directionally: what
+# the new install added must be created and what it removed must be dropped,
+# because a DROP is no substitute for a CREATE. The `created`/`dropped` sets
+# already carry that distinction, and creation is not limited to CREATE -- an
+# added enum label is created by ALTER TYPE ... ADD VALUE and an added column
+# by ALTER TABLE ... ADD COLUMN, both of which record a creation.
+#
+# The kinds below are PRESENCE keys instead, and stay direction-blind. An ACL,
+# comment, security label or role membership is recorded identically whichever
+# way the update script sets it -- a REVOKE, or a `COMMENT ON ... IS NULL`, is
+# how you remove one -- so what is asserted is only that the update script said
+# something about it at all.
+my %PRESENCE_KIND = map { $_ => 1 } qw(acl comment seclabel rolegrant);
+
+sub covered {
+    my ($key, $side) = @_;
+    my $set = $PRESENCE_KIND{ key_kind($key) } ? $upd->{touched} : $upd->{$side};
+    return matching_keys($set, $key) ? 1 : 0;
+}
+
+my @gap_added   = grep { !covered($_, 'created') } @added;
+my @gap_removed = grep { !covered($_, 'dropped') } @removed;
+
+print "update_lint: $label\n" if defined $label;
+print "  old install:   $old_path\n";
+print "  new install:   $new_path\n";
+print "  update script: $upd_path\n";
+printf "  %d object(s) added, %d removed\n", scalar @added, scalar @removed;
+
+# Advisory: a table whose seeded contents changed between the two installs, with
+# nothing in the update script writing to it. Never gating -- contents are
+# outside what either this check or bin/structural_diff compares.
+for my $k (sort keys %{ $new->{data} }) {
+    next if ($old->{data}{$k} || '') eq $new->{data}{$k};
+    next if $upd->{data}{$k};
+    print "WARNING: $k is populated differently by the two install scripts and the update script does not write to it\n";
+}
+
+if (@gap_added || @gap_removed) {
+    print "\nNot handled by the update script:\n";
+    print "  added, never created:   $_\n" for @gap_added;
+    print "  removed, never dropped: $_\n" for @gap_removed;
+    print STDERR "FAIL: "
+        . (scalar(@gap_added) + scalar(@gap_removed))
+        . " object(s) differ between $old_path and $new_path but are untouched by $upd_path\n";
+    exit 1;
+}
+
+printf "OK: %s accounts for all %d added and %d removed object(s)\n",
+    $upd_path, scalar @added, scalar @removed;
+exit 0;

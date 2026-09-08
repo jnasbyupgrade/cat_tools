@@ -105,3 +105,26 @@ clean_old_version:
 # `.vendor/linter/sql/bin/sql-lint sql/cat_tools--0.3.0.sql.in`.
 LINT_TARGETS = sql/cat_tools.sql.in test/
 include lint.mk
+
+# Static check that the update script into the current version accounts for
+# every object the install scripts on either side of it disagree about. Needs
+# no database, so it runs in the same cheap CI job as the style linter above;
+# see bin/update_lint's header for what it does and does not prove. Like
+# LINT_TARGETS, its default scope excludes released pairs, whose files are
+# frozen and whose findings could therefore never be fixed.
+#
+# CRITICAL: this must stay unwired from `lint` in both directions. `lint` only
+# exists when lint.mk's vendored include fires, which is guarded on
+# $(wildcard .git) -- in a released tarball there is no `lint` target at all
+# and `make lint` fails loudly with "No rule to make target". Naming `lint` as
+# a prerequisite here (or the reverse) would define it as a real target with no
+# recipe, quietly turning that failure into a pass.
+.PHONY: update-lint
+update-lint:
+	bin/update_lint
+
+# Unlike update-lint, this needs a checkout: bin/test is export-ignore'd, so it
+# is absent from a released tarball.
+.PHONY: update-lint-test
+update-lint-test:
+	prove bin/test/

@@ -394,6 +394,18 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@v7
+      - name: Test the update linter
+        # First, so a broken instrument reports as a broken instrument rather
+        # than as a clean (or noisy) SQL diff.
+        run: make update-lint-test
+      - name: Check update-script coverage
+        # Static check that sql/cat_tools--<last released>--<current>.sql.in
+        # accounts for every object the install scripts differ on. The step
+        # above already ran this same check on this same pair
+        # (bin/test/03-real-pairs.t), so this step buys attribution in the CI
+        # log -- a failure here names the SQL, not the linter -- rather than
+        # coverage the tests do not already have.
+        run: make update-lint
       - name: Lint SQL
         # CRITICAL: call `make lint` directly, not some other path (a script, a
         # different target, etc). lint.mk's vendored include is guarded on

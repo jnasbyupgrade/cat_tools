@@ -1,0 +1,22 @@
+/*
+ * The update script that fully accounts for all-forms-extra.sql.in.
+ *
+ * lt.size deliberately carries no explicit GRANT: the ALTER DEFAULT PRIVILEGES
+ * in all-forms.sql.in already covers it, and only a run that seeds this
+ * script's default-privilege state from the OLD install can see that.
+ */
+
+CREATE TYPE lt.size AS ENUM(
+  'small'
+  , 'large'
+);
+COMMENT ON TYPE lt.size IS $$How big a thing is$$;
+
+CREATE VIEW lt.thing_v3 AS SELECT id FROM lt.thing;
+GRANT SELECT ON lt.thing_v3 TO lt__usage;
+
+CREATE FUNCTION lt.measure(
+  thing_id int
+) RETURNS int LANGUAGE sql AS $body$SELECT 1$body$;
+REVOKE ALL ON FUNCTION lt.measure(thing_id int) FROM public;
+GRANT EXECUTE ON FUNCTION lt.measure(thing_id int) TO lt__usage;

@@ -1,0 +1,164 @@
+/*
+ * One instance of every statement form bin/update_lint recognizes.
+ *
+ * Teaching update_lint a new form means adding a line here AND extending the
+ * expected object set in bin/test/01-extract.t by hand. That hand-authored set
+ * IS the assertion: it is short enough to read, and a regenerated one would
+ * look equally plausible whichever way it was wrong.
+ *
+ * The helper names below (__cat_tools.exec, __cat_tools.create_function) are
+ * the literal names update_lint recurses through, so they are not renameable.
+ */
+
+@generated@
+
+DO $$
+BEGIN
+  CREATE ROLE lt__usage NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END
+$$;
+
+CREATE SCHEMA __cat_tools;
+CREATE SCHEMA lt;
+GRANT USAGE ON SCHEMA lt TO lt__usage;
+ALTER DEFAULT PRIVILEGES IN SCHEMA lt GRANT USAGE ON TYPES TO lt__usage;
+
+CREATE FUNCTION __cat_tools.exec(
+  sql text
+) RETURNS void LANGUAGE plpgsql AS $body$
+BEGIN
+  EXECUTE sql;
+END
+$body$;
+
+/*
+ * The nested $template$ strings below are format() templates -- data stored in
+ * a function body, not DDL -- so none of them may become objects.
+ */
+CREATE FUNCTION __cat_tools.create_function(
+  function_name text
+  , args text
+  , options text
+  , body text
+  , grants text DEFAULT NULL
+  , comment text DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql AS $body$
+DECLARE
+  create_template CONSTANT text := $template$
+CREATE OR REPLACE FUNCTION %s(
+%s
+) RETURNS %s AS
+%L
+$template$
+  ;
+  revoke_template CONSTANT text := $template$
+REVOKE ALL ON FUNCTION %s(
+%s
+) FROM public;
+$template$
+  ;
+@generated@
+BEGIN
+  PERFORM __cat_tools.exec(format(create_template, function_name, args, options, body));
+  PERFORM __cat_tools.exec(format(revoke_template, function_name, args));
+END
+$body$;
+
+@generated@
+
+/*
+ * Leading commas, two labels on one line, both comment styles interleaved, and
+ * a version-conditional marker whose line stays code here.
+ */
+CREATE TYPE lt.color AS ENUM(
+  'red', 'green' -- two labels, one line
+  /* a block comment in the middle of the label list */
+  , 'blue'
+  , 'ultraviolet' -- SED: REQUIRES 9.5!
+);
+COMMENT ON TYPE lt.color IS $$Colors a thing can be$$;
+
+CREATE TYPE lt.pair AS (
+  first_name text
+  , second_name text
+);
+
+CREATE DOMAIN lt.positive AS int CHECK( VALUE > 0 );
+
+CREATE TABLE lt.thing(
+  id int
+    CONSTRAINT thing__pk PRIMARY KEY
+  , shade lt.color
+);
+INSERT INTO lt.thing VALUES(1, 'red');
+UPDATE lt.thing SET shade = 'blue' WHERE id = 1;
+CLUSTER lt.thing USING thing__pk;
+SET LOCAL enable_seqscan = on;
+
+CREATE SEQUENCE lt.thing_seq;
+CREATE INDEX thing__shade ON lt.thing(shade);
+
+/*
+ * Dynamic DDL through the exec() gateway. The view name is real; the %s is a
+ * placeholder and must not be mistaken for one.
+ */
+SELECT __cat_tools.exec(format($fmt$
+CREATE OR REPLACE VIEW lt.thing_v AS
+  SELECT %s FROM lt.thing
+;
+$fmt$
+  , 'id, shade'
+));
+REVOKE ALL ON lt.thing_v FROM public;
+GRANT SELECT ON lt.thing_v TO lt__usage;
+
+CREATE VIEW lt.thing_v2 AS SELECT id FROM lt.thing;
+
+CREATE CAST ("char" AS lt.color) WITH INOUT AS IMPLICIT;
+
+SELECT __cat_tools.create_function(
+  'lt.describe'
+  , 'thing_id int, verbose boolean'
+  , 'text LANGUAGE sql STABLE'
+  , $body$
+SELECT 'thing'
+$body$
+  , 'lt__usage'
+  , 'Describe a thing'
+);
+
+-- No grants and no comment argument: only the function and its ACL.
+SELECT __cat_tools.create_function(
+  'lt.internal'
+  , ''
+  , 'void LANGUAGE sql'
+  , $body$
+SELECT NULL::void
+$body$
+);
+
+GRANT USAGE ON TYPE
+  lt.color
+  , lt.positive
+  TO lt__usage;
+
+@generated@
+
+/*
+ * Scaffolding teardown: every key created and dropped in one file cancels out,
+ * which is what keeps __cat_tools out of the object set with no name list.
+ */
+DROP FUNCTION __cat_tools.exec(
+  sql text
+);
+DROP FUNCTION __cat_tools.create_function(
+  function_name text
+  , args text
+  , options text
+  , body text
+  , grants text
+  , comment text
+);
+DROP SCHEMA __cat_tools;

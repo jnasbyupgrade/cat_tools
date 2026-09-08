@@ -1,0 +1,24 @@
+/*
+ * The delta half of the diff fixture pair. 02-diff.t concatenates
+ * all-forms.sql.in with this file to build the "new install" side, so the
+ * object set of all-forms.sql.in stays defined in exactly one place.
+ *
+ * Everything here is plain DDL rather than a __cat_tools.create_function()
+ * call, because the concatenation lands after all-forms.sql.in has dropped its
+ * scaffolding. update-covers-all.sql.in must account for every key this adds.
+ */
+
+CREATE TYPE lt.size AS ENUM(
+  'small'
+  , 'large'
+);
+COMMENT ON TYPE lt.size IS $$How big a thing is$$;
+
+CREATE VIEW lt.thing_v3 AS SELECT id FROM lt.thing;
+GRANT SELECT ON lt.thing_v3 TO lt__usage;
+
+CREATE FUNCTION lt.measure(
+  thing_id int
+) RETURNS int LANGUAGE sql AS $body$SELECT 1$body$;
+REVOKE ALL ON FUNCTION lt.measure(thing_id int) FROM public;
+GRANT EXECUTE ON FUNCTION lt.measure(thing_id int) TO lt__usage;
