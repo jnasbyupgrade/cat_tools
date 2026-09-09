@@ -1800,6 +1800,8 @@ if (@gap_added || @gap_removed) {
     print STDERR "FAIL: "
         . (scalar(@gap_added) + scalar(@gap_removed))
         . " object(s) differ between $old_path and $new_path but are untouched by $upd_path\n";
+    print STDERR "hint: add the matching statements to $upd_path; "
+        . "$PROG --list-objects FILE shows what was extracted from a file.\n";
     exit 1;
 }
 

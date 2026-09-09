@@ -67,6 +67,16 @@ byte-for-byte copy of `cat_tools.sql.in`, regenerated on every `make`), so
 unlike a real release it's ignored too rather than tracked. See
 `sql/.gitignore`'s comments and RELEASE.md step 4 for the full detail.
 
+Run `make update-lint` whenever changing the extension's SQL: `bin/update_lint`
+statically checks that the update script into the current version accounts
+for every object added or removed since the last release — the automated
+half of RELEASE.md's "Ongoing development" rule to keep
+`sql/cat_tools--<last-released>--stable.sql.in` current. It compares object
+identity, not definition, so `bin/structural_diff` remains the authority on
+whether a fresh install and an updated one are actually equivalent.
+`make update-lint-test` runs the linter's own test suite; both run in the CI
+`lint` job.
+
 ## CI: PostgreSQL version support
 
 See [`../ai/CLAUDE.md`](../ai/CLAUDE.md) for the general PostgreSQL-version-
