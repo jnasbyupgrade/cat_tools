@@ -1,0 +1,367 @@
+#!/usr/bin/env perl
+#
+# update_lint_textfirst - INCOMPLETE PROTOTYPE. Do not merge, do not wire into
+# CI. It exists only to show, concretely, what a text-first update-script
+# checker looks like next to the object-model one in
+# https://github.com/Postgres-Extensions/cat_tools/pull/90. Several real cases
+# are stubbed, and it has known false positives (both listed below).
+#
+# The problem is the same one bin/update_lint states: a PR that changes an
+# extension's SQL must also extend sql/<ext>--<old>--<new>.sql.in so an
+# existing install reaches the same objects, and nothing fails when that is
+# forgotten until a runtime check that needs a database and minutes of CI.
+#
+# The principle here is different, and it is the whole point of the sketch:
+# never build a model of what an object IS. Compare STATEMENT TEXT.
+#
+#   1. Split both install scripts into top-level statements (quote-, comment-
+#      and dollar-quote-aware, so a `;` inside any of those is not a boundary).
+#   2. Normalize each statement: drop comments, collapse whitespace.
+#   3. Multiset-diff the two normalized statement lists. In NEW but not OLD is
+#      "added"; in OLD but not NEW is "removed".
+#   4. Every added/removed statement must appear, normalized, SOMEWHERE in the
+#      normalized update script -- substring match against the whole file, not
+#      statement against statement, so a copy wrapped in a DO block, a format()
+#      or an IF still matches.
+#   5. Anything unmatched is reported; exit non-zero.
+#
+# That works because update scripts are overwhelmingly copy-paste from the
+# install script: measured on this tree's own history, 85% of added statements
+# match verbatim. The interesting content of the tool is therefore not the
+# matcher, it is the list of cases where a copy is impossible -- and the escape
+# hatch for the rest.
+#
+# USAGE:
+#   bin/update_lint_textfirst --versions OLD NEW
+#   bin/update_lint_textfirst OLD_INSTALL NEW_INSTALL UPDATE_SCRIPT
+#   Options: --sql-dir DIR (default "sql"), --ext NAME (default "cat_tools").
+#   Exit: 0 clean, 1 gaps found, 2 usage error.
+#
+# ESCAPE HATCH (implemented; it is central to the design)
+#
+#   A waiver comment in the UPDATE script:
+#
+#       -- update-lint: ok /REGEX/ reason
+#
+#   Any finding whose text matches REGEX is suppressed, and the reason is
+#   printed instead. Reason is mandatory. Waivers that match nothing are
+#   reported, so they cannot rot silently. The design intent is that a release
+#   carries a handful of these on genuine exceptions -- not one per statement.
+#   They live in the update script because that is the file being reviewed and
+#   the file the exception is a property of.
+#
+# IMPLEMENTED GAP: ALTER DEFAULT PRIVILEGES
+#
+#   ADP is not retroactive, so a copy of it in the update script is not enough.
+#   When NEW's install adds an ADP that OLD's install did not have, every
+#   object of that category that ALREADY EXISTED in OLD needs an explicit GRANT
+#   in the update script; only objects created after the ADP runs inherit it.
+#   This is a real bug in this tree's history, which is the acceptance test:
+#   --versions 0.2.1 0.2.2 flags five enum types created in 0.2.0/0.2.1 that
+#   never got GRANT USAGE. Only the TYPES category is implemented.
+#
+# STUBBED -- these are the other cases where the update script legitimately
+# cannot hold a copy of the install statement, and this prototype does not
+# handle any of them (each is a false positive today, waivable by hand):
+#
+#   - Enum values. Install says CREATE TYPE ... AS ENUM ('a','b','c'); the
+#     update must say ALTER TYPE ... ADD VALUE 'c'. Needs a label-set diff.
+#   - New columns. Install states the final CREATE TABLE column list; the
+#     update needs ALTER TABLE ... ADD COLUMN.
+#   - Changed view column list. Install uses CREATE OR REPLACE VIEW; the update
+#     must DROP VIEW + CREATE VIEW, because REPLACE cannot drop a column.
+#   - Removals. A DROP never appears in an install script, so a removed
+#     statement can only ever be matched by inference, never by copy. Removed
+#     statements are counted and listed but NOT failed on.
+#
+# KNOWN FALSE POSITIVE SOURCES
+#
+#   - Scaffolding bound to old names. The update script's private copy of
+#     __cat_tools.create_function() calls a differently-named helper than the
+#     install's copy, so the text legitimately differs. This fires on the
+#     current dev pair today.
+#   - Any hand-reformatting. Two helper calls rewritten as literal CREATE OR
+#     REPLACE FUNCTION make 0.2.2->0.2.3 report 2 of 2 added unmatched, even
+#     though the update is correct. Text-first cannot tell that from a real
+#     omission; the escape hatch is the only answer.
+#   - Function overloads, argument reordering, and any semantics-preserving
+#     edit are all invisible to text matching in the same way.
+
+use strict;
+use warnings;
+
+my $PROG = 'bin/update_lint_textfirst';
+
+# ---------------------------------------------------------------------------
+# Input
+# ---------------------------------------------------------------------------
+
+# sql.mk rewrites the bare @generated@ marker into a -- comment on its way to
+# the generated .sql, and resolves the version-conditional `-- SED:` markers.
+# Doing the identical substitutions here is what makes them inert without
+# special-casing them in the scanner. As in bin/update_lint, PRIOR TO branches
+# are commented out: every marker in this tree names a PostgreSQL below the
+# support floor, so the REQUIRES branch is the one that installs everywhere.
+sub preprocess {
+    my ($text) = @_;
+    $text =~ s/\@generated\@/-- GENERATED FILE! DO NOT EDIT!/g;
+    $text =~ s/^(.*)-- SED: PRIOR TO ([^!\n]*)!/-- Not used prior to $2: $1/gm;
+    return $text;
+}
+
+sub read_file {
+    my ($path) = @_;
+    open my $fh, '<', $path or usage_error("cannot read $path: $!");
+    usage_error("$path is not a plain file") unless -f $fh || -c $fh;
+    local $/;
+    my $t = <$fh>;
+    close $fh;
+    return preprocess(defined $t ? $t : '');
+}
+
+# ---------------------------------------------------------------------------
+# Splitter
+#
+# One left-to-right pass. Comment bodies are replaced by a single space as they
+# are consumed, which is both the comment strip and the whitespace collapse
+# seed; everything else is copied through verbatim so that quoted text is never
+# reinterpreted. A `;` only ends a statement when the pass is not inside a
+# quote, a dollar-quote or a comment, which is the entire reason this is a
+# scanner and not a split /;/.
+# ---------------------------------------------------------------------------
+
+sub split_statements {
+    my ($text) = @_;
+    my (@stmts, $cur);
+    my ($i, $n, $line, $stmt_line) = (0, length($text), 1, 1);
+    $cur = '';
+
+    my $flush = sub {
+        my $norm = $cur;
+        $norm =~ s/\s+/ /g;
+        $norm =~ s/\A | \z//g;
+        push @stmts, { norm => $norm, line => $stmt_line } if $norm =~ /\S/;
+        $cur = '';
+    };
+
+    while ($i < $n) {
+        my $two = substr($text, $i, 2);
+
+        if ($two eq '--') {
+            my $j = index($text, "\n", $i);
+            $j = $n if $j < 0;
+            $i = $j;
+            $cur .= ' ';
+            next;
+        }
+        if ($two eq '/*') {    # PostgreSQL block comments nest
+            my ($depth, $j) = (1, $i + 2);
+            while ($j < $n && $depth) {
+                my $t = substr($text, $j, 2);
+                if    ($t eq '/*') { $depth++; $j += 2 }
+                elsif ($t eq '*/') { $depth--; $j += 2 }
+                else               { $line++ if substr($text, $j, 1) eq "\n"; $j++ }
+            }
+            $i = $j;
+            $cur .= ' ';
+            next;
+        }
+
+        my $c = substr($text, $i, 1);
+
+        if ($c eq q{'} || $c eq q{"}) {
+            my $j = $i + 1;
+            while ($j < $n) {
+                if (substr($text, $j, 1) eq $c) {
+                    last unless substr($text, $j + 1, 1) eq $c;    # '' escapes '
+                    $j += 2;
+                    next;
+                }
+                $line++ if substr($text, $j, 1) eq "\n";
+                $j++;
+            }
+            $cur .= substr($text, $i, $j - $i + 1);
+            $i = $j + 1;
+            next;
+        }
+
+        if ($c eq '$' && substr($text, $i) =~ /\A(\$(?:[A-Za-z_]\w*)?\$)/) {
+            my $tag = $1;
+            my $j = index($text, $tag, $i + length $tag);
+            $j = $n - length($tag) if $j < 0;
+            my $chunk = substr($text, $i, $j - $i + length $tag);
+            $line += ($chunk =~ tr/\n//);
+            $cur .= $chunk;
+            $i = $j + length $tag;
+            next;
+        }
+
+        if ($c eq ';') {
+            $flush->();
+            $i++;
+            $stmt_line = $line;
+            next;
+        }
+
+        $line++ if $c eq "\n";
+        $stmt_line = $line if $cur !~ /\S/;    # first real char sets the line
+        $cur .= $c;
+        $i++;
+    }
+    $flush->();
+    return @stmts;
+}
+
+# The haystack for rule 4: the whole update file as one normalized string, so a
+# statement copied into a DO block, a format() template or an IF branch still
+# matches even though it is not a top-level statement over there.
+sub normalized_blob {
+    my ($text) = @_;
+    return join ' ; ', map { $_->{norm} } split_statements($text);
+}
+
+# ---------------------------------------------------------------------------
+# Waivers
+# ---------------------------------------------------------------------------
+
+sub parse_waivers {
+    my ($text) = @_;
+    my @w;
+    for my $line (split /\n/, $text) {
+        next unless $line =~ m{--\s*update-lint:\s*ok\s+/(.+?)/\s*(\S.*?)\s*\z};
+        my ($re, $why) = ($1, $2);
+        my $qr = eval { qr/$re/i };
+        usage_error("bad regex in waiver: /$re/") unless $qr;
+        push @w, { re => $qr, src => $re, why => $why, used => 0 };
+    }
+    return @w;
+}
+
+sub waive {
+    my ($waivers, $subject) = @_;
+    for my $w (@$waivers) {
+        next unless $subject =~ $w->{re};
+        $w->{used}++;
+        return $w;
+    }
+    return undef;
+}
+
+# ---------------------------------------------------------------------------
+# ALTER DEFAULT PRIVILEGES
+#
+# The one gap this prototype implements. See the header for why a copy of the
+# ADP statement in the update script does not cover objects that predate it.
+# Only the TYPES category is handled; TABLES/FUNCTIONS/SEQUENCES/SCHEMAS would
+# each need their own "what creates one of these" pattern and are not written.
+# ---------------------------------------------------------------------------
+
+sub adp_gaps {
+    my ($old, $new, $update_blob) = @_;
+    my %in_old = map { $_->{norm} => 1 } @$old;
+    my @gaps;
+
+    for my $st (@$new) {
+        next if $in_old{ $st->{norm} };    # already in force before OLD's objects were made
+        next unless $st->{norm} =~ /\A
+            ALTER \s+ DEFAULT \s+ PRIVILEGES \s+
+            IN \s+ SCHEMA \s+ (\S+) \s+
+            GRANT \s+ (.+?) \s+ ON \s+ TYPES \s+ TO \s+ (\S+)
+        /xi;
+        my ($schema, $privs, $role) = ($1, $2, $3);
+
+        for my $o (@$old) {
+            next unless $o->{norm} =~ /\ACREATE\s+(TYPE|DOMAIN)\s+(\S+)/i;
+            my ($what, $name) = (uc $1, $2);
+            next unless $name =~ /\A\Q$schema\E\./;
+            next if $update_blob =~ /GRANT\s+\Q$privs\E\s+ON\s+(?:$what\s+)?\Q$name\E\s+TO\s+\Q$role\E/i;
+            push @gaps, "$what $name predates the new ALTER DEFAULT PRIVILEGES; "
+                      . "update script needs an explicit "
+                      . "GRANT $privs ON $what $name TO $role";
+        }
+    }
+    return @gaps;
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+sub usage_error { print STDERR "$PROG: $_[0]\n"; exit 2 }
+
+my ($sql_dir, $ext, @versions, @paths) = ('sql', 'cat_tools');
+while (@ARGV) {
+    my $a = shift @ARGV;
+    if    ($a eq '--sql-dir')  { $sql_dir = shift @ARGV // usage_error('--sql-dir needs a value') }
+    elsif ($a eq '--ext')      { $ext     = shift @ARGV // usage_error('--ext needs a value') }
+    elsif ($a eq '--versions') { @versions = splice @ARGV, 0, 2 }
+    elsif ($a =~ /\A-/)        { usage_error("unknown option $a") }
+    else                       { push @paths, $a }
+}
+
+if (@versions) {
+    usage_error('--versions needs OLD and NEW') unless @versions == 2;
+    usage_error('--versions and positional paths are exclusive') if @paths;
+    my ($o, $n) = @versions;
+    # A missing update script is EMPTY, not skipped: skipping would pass
+    # silently on exactly the omission this check exists to catch.
+    for my $stem ("$ext--$o", "$ext--$n", "$ext--$o--$n") {
+        my $p = "$sql_dir/$stem.sql.in";
+        $p = "$sql_dir/$stem.sql" unless -e $p;
+        push @paths, -e $p ? $p : '/dev/null';
+    }
+}
+usage_error('need three paths, or --versions OLD NEW') unless @paths == 3;
+
+my ($old_text, $new_text, $upd_text) = map { read_file($_) } @paths;
+my @old = split_statements($old_text);
+my @new = split_statements($new_text);
+my $blob = normalized_blob($upd_text);
+my @waivers = parse_waivers($upd_text);
+
+my %old_count;
+$old_count{ $_->{norm} }++ for @old;
+my %new_count;
+$new_count{ $_->{norm} }++ for @new;
+
+# Multiset, not set: two identical statements in NEW against one in OLD is one
+# addition. The budget hash is what makes the second copy stop counting.
+my (@added, @removed, %budget);
+%budget = map { $_ => $new_count{$_} - ($old_count{$_} // 0) } keys %new_count;
+push @added, $_ for grep { $budget{ $_->{norm} }-- > 0 } @new;
+%budget = map { $_ => $old_count{$_} - ($new_count{$_} // 0) } keys %old_count;
+push @removed, $_ for grep { $budget{ $_->{norm} }-- > 0 } @old;
+
+my (@fail, @waived);
+my $matched = 0;
+for my $st (@added) {
+    if (index($blob, $st->{norm}) >= 0) { $matched++; next }
+    if (my $w = waive(\@waivers, $st->{norm})) {
+        push @waived, "$paths[1]:$st->{line}: $w->{why}";
+        next;
+    }
+    push @fail, "$paths[1]:$st->{line}: added statement has no copy in $paths[2]\n"
+              . '    ' . abbrev($st->{norm});
+}
+
+for my $g (adp_gaps(\@old, \@new, $blob)) {
+    if (my $w = waive(\@waivers, $g)) { push @waived, "ADP: $w->{why}"; next }
+    push @fail, "$paths[2]: $g";
+}
+
+sub abbrev { my $s = shift; length($s) > 140 ? substr($s, 0, 137) . '...' : $s }
+
+printf "%s\n  old %s (%d statements)\n  new %s (%d statements)\n  update %s\n",
+    $PROG, $paths[0], scalar @old, $paths[1], scalar @new, $paths[2];
+printf "  added %d (matched %d, unmatched %d), removed %d (not checked -- see header)\n",
+    scalar @added, $matched, scalar @added - $matched, scalar @removed;
+print "  waived $_\n" for @waived;
+print "  UNUSED WAIVER /$_->{src}/ -- $_->{why}\n" for grep { !$_->{used} } @waivers;
+
+if (@fail) {
+    print "\n$_\n" for @fail;
+    printf STDERR "\n%s: FAIL, %d finding(s)\n", $PROG, scalar @fail;
+    exit 1;
+}
+print "  OK\n";
+exit 0;
