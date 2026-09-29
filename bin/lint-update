@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 #
-# update_lint_textfirst - catch an install-script change whose update script
+# lint-update - catch an install-script change whose update script
 # forgot to keep up, statically: no database, no SQL parser, seconds not
 # minutes.
 #
@@ -11,9 +11,9 @@
 #
 # USAGE
 #
-#   bin/update_lint_textfirst                        # the current cycle
-#   bin/update_lint_textfirst --versions OLD NEW     # any other pair
-#   bin/update_lint_textfirst OLD NEW UPDATE         # explicit paths
+#   bin/lint-update                        # the current cycle
+#   bin/lint-update --versions OLD NEW     # any other pair
+#   bin/lint-update OLD NEW UPDATE         # explicit paths
 #   Options: --sql-dir DIR (default "sql"), --ext NAME (default "cat_tools").
 #   Exit: 0 clean, 1 findings, 2 usage error.
 #
@@ -159,7 +159,7 @@
 use strict;
 use warnings;
 
-my $PROG = 'bin/update_lint_textfirst';
+my $PROG = 'bin/lint-update';
 
 # Set from @ARGV below, but declared here so the subs close over them.
 my ($sql_dir, $ext) = ('sql', 'cat_tools');

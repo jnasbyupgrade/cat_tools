@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 #
-# One case per rule bin/update_lint_textfirst implements, plus the three things
+# One case per rule bin/lint-update implements, plus the three things
 # only the real tree can prove: that the current development pair is clean, that
 # the ALTER DEFAULT PRIVILEGES rule reproduces the historical bug it was written
 # for, and that preprocessing erases sql.mk's " VERSIONED FILE!" tag. Kept
@@ -14,7 +14,7 @@ use warnings;
 use Test::More tests => 32;
 use File::Temp qw(tempdir);
 
-my $PROG = 'bin/update_lint_textfirst';
+my $PROG = 'bin/lint-update';
 my $DIR  = tempdir(CLEANUP => 1);
 
 # Write an OLD/NEW/UPDATE trio and run the linter over it.

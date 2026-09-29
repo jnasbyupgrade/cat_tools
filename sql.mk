@@ -180,7 +180,7 @@ else
 _sql_sed_93 = pgxntool/safesed $@.tmp -E -e 's/(.*)-- SED: PRIOR TO 9\.3!/-- Not used prior to 9.3: \1/'
 endif
 
-# DUPLICATED AT bin/update_lint_textfirst's preprocess(), which reads .sql.in
+# DUPLICATED AT bin/lint-update's preprocess(), which reads .sql.in
 # directly and has to reach the same text this produces.
 #
 # Apply all version-conditional SED markers to $@.tmp: 9.x via the safesed vars
@@ -225,7 +225,7 @@ endef
 # TODO: refactor the version handling into a function.
 # ----------------------------------------------------------------------------
 
-# DUPLICATED AT bin/update_lint_textfirst's preprocess() (this recipe's
+# DUPLICATED AT bin/lint-update's preprocess() (this recipe's
 # @generated@ sed, and the " VERSIONED FILE!" tag added by the rule below it).
 #
 # @generated@ becomes the "-- GENERATED FILE! DO NOT EDIT!" marker below via a

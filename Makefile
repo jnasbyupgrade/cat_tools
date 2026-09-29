@@ -107,20 +107,20 @@ LINT_TARGETS = sql/cat_tools.sql.in test/
 include lint.mk
 
 # Static check that this cycle's update script accounts for every change to the
-# install script -- no database, no SQL parser. See bin/update_lint_textfirst's
+# install script -- no database, no SQL parser. See bin/lint-update's
 # header for what it does and does not catch.
 #
 # Deliberately NOT tied to `lint` in either direction. lint.mk's include is
 # guarded on $(wildcard .git), so `lint` does not exist as a target in a
 # released tarball and `make lint` fails loudly there; naming it as a
 # prerequisite would define it with no recipe and turn that loud failure into a
-# silent pass.
-.PHONY: update-lint
-update-lint:
-	bin/update_lint_textfirst
+# silent pass. `lint-update` is a synonym for `update-lint`.
+.PHONY: update-lint lint-update
+update-lint lint-update:
+	bin/lint-update
 
 # Everything in bin/ that the rest of the suite leans on -- bin/test_existing
-# and bin/structural_diff drive the pgTAP runs, bin/update_lint_textfirst drives
+# and bin/structural_diff drive the pgTAP runs, bin/lint-update drives
 # `update-lint` above -- so run this before anything that uses them: a broken
 # tool otherwise reports as a broken extension. prove takes the directory, so a
 # new bin/test/*.t needs no edit here. Test::Harness is core Perl; no setup.
