@@ -32,7 +32,9 @@
 #
 #   1. Split both install scripts into top-level statements (quote-, comment-
 #      and dollar-quote-aware, so a `;` inside any of those is not a boundary).
-#   2. Normalize each statement: drop comments, collapse whitespace.
+#   2. Normalize each statement: collapse whitespace. A comment inside a
+#      statement is kept (an object's text should be literally identical in
+#      both scripts); a comment between statements is dropped.
 #   3. Multiset-diff the two normalized statement lists. In NEW but not OLD is
 #      "added"; in OLD but not NEW is "removed".
 #   4. Every added statement must appear, normalized, SOMEWHERE in the
@@ -150,6 +152,10 @@
 #     reindenting a statement, reordering two GRANTs, hand-rewriting a helper
 #     call as the literal CREATE OR REPLACE FUNCTION it expands to, adding an
 #     overload. The escape hatch is the answer; there is no cheaper one.
+#   - A comment-only edit inside a non-routine statement (a view, a table, an
+#     enum list) is a false positive, because PostgreSQL does not keep that
+#     comment. The fix is a copy in the update script or a waiver; for a table it
+#     can only be a waiver.
 #   - Substring-against-the-whole-file is loose in the other direction. A
 #     statement copied into a comment, into a format() template that is never
 #     executed, or into an `IF false` branch counts as matched.
@@ -172,26 +178,13 @@ sub abbrev { my $s = shift; length($s) > 140 ? substr($s, 0, 137) . '...' : $s }
 # Input
 # ---------------------------------------------------------------------------
 
-# DUPLICATED AT sql.mk -- the sql/%.sql pattern rule's @generated@ sed and the
-# _apply_version_seds define. Both sides must stay in step.
-#
-# sql.mk resolves the @generated@ and `-- SED:` markers on the way to the
-# generated .sql; doing the identical substitutions here is what makes them
-# inert without special-casing them in the scanner. As in the released files,
-# PRIOR TO branches are commented out: every marker in this tree names a
-# PostgreSQL below the support floor, so the REQUIRES branch is the one that
-# installs everywhere.
-#
-# The " VERSIONED FILE!" tag sql.mk appends when it copies the base file to a
-# versioned one must collapse to the same text, because one @generated@ sits
-# inside __cat_tools.create_function()'s dollar-quoted body, where a comment is
-# body text the splitter cannot strip. Left distinct, that one marker makes
-# every release's copy of that function differ from the base file's for a
-# reason that has nothing to do with the extension's contents.
+# Deleting `@generated@` through end of line removes the marker from every
+# copy, including the one inside __cat_tools.create_function()'s dollar-quoted
+# body; the build turns it into a `--` comment, so the rest of that line is a
+# comment there anyway.
 sub preprocess {
     my ($text) = @_;
-    $text =~ s/\@generated\@(?:\s+VERSIONED\s+FILE!)?/-- GENERATED FILE! DO NOT EDIT!/g;
-    $text =~ s/^(.*)-- SED: PRIOR TO ([^!\n]*)!/-- Not used prior to $2: $1/gm;
+    $text =~ s/\@generated\@.*//g;
     return $text;
 }
 
@@ -208,9 +201,8 @@ sub read_file {
 # ---------------------------------------------------------------------------
 # Splitter
 #
-# One left-to-right pass. Comment bodies are replaced by a single space as they
-# are consumed, which is both the comment strip and the whitespace collapse
-# seed; everything else is copied through verbatim so that quoted text is never
+# One left-to-right pass. A comment between statements is replaced by a single
+# space; a comment inside a statement is kept (see $keep_comment). Everything else is copied through verbatim so that quoted text is never
 # reinterpreted. A `;` only ends a statement when the pass is not inside a
 # quote, a dollar-quote or a comment, which is the entire reason this is a
 # scanner and not a split /;/.
@@ -230,14 +222,20 @@ sub split_statements {
         $cur = '';
     };
 
+    # Comments between statements never reach an installed extension and would
+    # otherwise attach to the next statement's text. Comments inside a statement
+    # are compared, so an object's text (a routine body especially) stays
+    # literally identical between the install and update scripts.
+    my $keep_comment = sub { $cur =~ /\S/ ? " $_[0] " : ' ' };
+
     while ($i < $n) {
         my $two = substr($text, $i, 2);
 
         if ($two eq '--') {
             my $j = index($text, "\n", $i);
             $j = $n if $j < 0;
+            $cur .= $keep_comment->(substr($text, $i, $j - $i));
             $i = $j;
-            $cur .= ' ';
             next;
         }
         if ($two eq '/*') {    # PostgreSQL block comments nest
@@ -248,8 +246,8 @@ sub split_statements {
                 elsif ($t eq '*/') { $depth--; $j += 2 }
                 else               { $line++ if substr($text, $j, 1) eq "\n"; $j++ }
             }
+            $cur .= $keep_comment->(substr($text, $i, $j - $i));
             $i = $j;
-            $cur .= ' ';
             next;
         }
 

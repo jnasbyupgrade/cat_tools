@@ -3,7 +3,7 @@
 # One case per rule bin/lint-update implements, plus the three things
 # only the real tree can prove: that the current development pair is clean, that
 # the ALTER DEFAULT PRIVILEGES rule reproduces the historical bug it was written
-# for, and that preprocessing erases sql.mk's " VERSIONED FILE!" tag. Kept
+# for. Kept
 # deliberately small -- a checker whose test suite dwarfs it has stopped being
 # the cheap option. Run from the repo root:
 #
@@ -11,7 +11,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 32;
+use Test::More tests => 38;
 use File::Temp qw(tempdir);
 
 my $PROG = 'bin/lint-update';
@@ -52,6 +52,46 @@ SQL
     my ($rc, $out) = run_trio(old => $sql, new => $sql, update => '');
     is $rc, 0, 'identical files are clean';
     like $out, qr/old \S+ \(4 statements\)/, 'four top-level statements found';
+}
+
+# --- comments: kept inside a statement, dropped between statements ----------
+
+{
+    my ($rc) = run_trio(
+        old    => "SELECT 1;\n-- old note\nSELECT 2;\n",
+        new    => "SELECT 1;\n-- new note, reworded\nSELECT 2;\n",
+        update => '',
+    );
+    is $rc, 0, 'a comment between statements that changed in NEW only is ignored';
+}
+
+{
+    my ($rc, $out) = run_trio(
+        old    => "SELECT 1, -- old note\n  2;\n",
+        new    => "SELECT 1, -- new note\n  2;\n",
+        update => "SELECT 2;\n",
+    );
+    is $rc, 1, 'a comment inside a statement that changed in NEW only is a finding';
+    like $out, qr/-- new note/, '... and the kept comment is part of the reported text';
+}
+
+{
+    my ($rc, $out) = run_trio(
+        old    => "SELECT 1;\n",
+        new    => "SELECT 1;\n-- about t\nCREATE TABLE t (a int);\n",
+        update => "CREATE TABLE t (a int);\n",
+    );
+    is $rc, 0, 'a new statement copied without the comment before it is matched';
+}
+
+{
+    my ($rc, $out) = run_trio(
+        old    => "SELECT 1;\n",
+        new    => "SELECT 1;\nSELECT a, -- SED: REQUIRES 9.3!\n  b;\n",
+        update => "SELECT a,\n  b;\n",
+    );
+    is $rc, 1, 'a statement whose trailing SED comment is missing from the copy is a finding';
+    like $out, qr/SED: REQUIRES 9\.3!/, '... and the finding shows the dropped comment';
 }
 
 # --- rule 4: substring against the whole update file ------------------------
@@ -206,11 +246,9 @@ SKIP: {
     like $out, qr{new sql/cat_tools\.sql\.in\b}, '... comparing against the base install script';
     like $out, qr{update sql/cat_tools--\S+--stable\.sql\.in}, '... via this cycle\'s update script';
 
-    # A released install script is a copy of the base file with sql.mk's
-    # " VERSIONED FILE!" tag added to every @generated@ marker. One of those
-    # markers sits inside a dollar-quoted function body where no comment strip
-    # can reach it, so the pair above is only clean if preprocessing erases the
-    # difference.
+    # One @generated@ marker sits inside a dollar-quoted function body, and a
+    # released copy carries extra text after it. The pair above is only clean
+    # because preprocessing deletes the marker through end of line.
     unlike $out, qr/create_function/, '... with no @generated@ tag false positive';
 
     $out = qx{$^X $PROG --versions 0.2.1 0.2.2 2>&1};
