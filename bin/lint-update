@@ -32,6 +32,10 @@
 #
 #   1. Split both install scripts into top-level statements (quote-, comment-
 #      and dollar-quote-aware, so a `;` inside any of those is not a boundary).
+#   1a. Before splitting, delete every `@generated@` marker (sql.mk's
+#      do-not-edit tag) through end of line, so its ` VERSIONED FILE!` variant
+#      in released copies compares equal. Any other text after a marker is an
+#      error (exit 2).
 #   2. Normalize each statement: collapse whitespace. A comment inside a
 #      statement is kept (an object's text should be literally identical in
 #      both scripts); a comment between statements is dropped.
@@ -156,6 +160,10 @@
 #     enum list) is a false positive, because PostgreSQL does not keep that
 #     comment. The fix is a copy in the update script or a waiver; for a table it
 #     can only be a waiver.
+#   - A `@generated@` marker followed on its line by anything but ` VERSIONED
+#     FILE!` (a closing `*/`, a quote, more code) is rejected with exit 2 rather
+#     than analyzed, because deleting the rest of the line could remove a
+#     delimiter. Nothing in the tree does this; move the marker if one must.
 #   - Substring-against-the-whole-file is loose in the other direction. A
 #     statement copied into a comment, into a format() template that is never
 #     executed, or into an `IF false` branch counts as matched.
@@ -180,11 +188,21 @@ sub abbrev { my $s = shift; length($s) > 140 ? substr($s, 0, 137) . '...' : $s }
 
 # Deleting `@generated@` through end of line removes the marker from every
 # copy, including the one inside __cat_tools.create_function()'s dollar-quoted
-# body; the build turns it into a `--` comment, so the rest of that line is a
-# comment there anyway.
+# body. That is only sound when nothing but sql.mk's own tag follows the marker
+# on its line (the build turns the marker into a `--` comment, so the tag is
+# comment text); anything else could be a closing `*/`, quote or dollar-quote
+# delimiter that the deletion would swallow, so it is an error.
 sub preprocess {
-    my ($text) = @_;
-    $text =~ s/\@generated\@.*//g;
+    my ($text, $path) = @_;
+    $text =~ s{\@generated\@([^\n]*)}{
+        my $rest = $1;
+        if ($rest ne '' && $rest ne ' VERSIONED FILE!') {
+            my $ln = 1 + (substr($text, 0, $-[0]) =~ tr/\n//);
+            usage_error("$path:$ln: text after \@generated\@ other than "
+                . "' VERSIONED FILE!' cannot be analyzed");
+        }
+        '';
+    }ge;
     return $text;
 }
 
@@ -195,14 +213,15 @@ sub read_file {
     local $/;
     my $t = <$fh>;
     close $fh;
-    return preprocess(defined $t ? $t : '');
+    return preprocess(defined $t ? $t : '', $path);
 }
 
 # ---------------------------------------------------------------------------
 # Splitter
 #
 # One left-to-right pass. A comment between statements is replaced by a single
-# space; a comment inside a statement is kept (see $keep_comment). Everything else is copied through verbatim so that quoted text is never
+# space; a comment inside a statement is kept (see $keep_comment below).
+# Everything else is copied through verbatim so that quoted text is never
 # reinterpreted. A `;` only ends a statement when the pass is not inside a
 # quote, a dollar-quote or a comment, which is the entire reason this is a
 # scanner and not a split /;/.
@@ -226,7 +245,12 @@ sub split_statements {
     # otherwise attach to the next statement's text. Comments inside a statement
     # are compared, so an object's text (a routine body especially) stays
     # literally identical between the install and update scripts.
-    my $keep_comment = sub { $cur =~ /\S/ ? " $_[0] " : ' ' };
+    # A kept `--` comment ends in <EOL>, since the newline that ends it is lost
+    # to whitespace collapse and code moving across it would otherwise match.
+    my $keep_comment = sub {
+        my ($c, $eol) = @_;
+        $cur =~ /\S/ ? ($eol ? " $c <EOL> " : " $c ") : ' ';
+    };
 
     while ($i < $n) {
         my $two = substr($text, $i, 2);
@@ -234,7 +258,7 @@ sub split_statements {
         if ($two eq '--') {
             my $j = index($text, "\n", $i);
             $j = $n if $j < 0;
-            $cur .= $keep_comment->(substr($text, $i, $j - $i));
+            $cur .= $keep_comment->(substr($text, $i, $j - $i), 1);
             $i = $j;
             next;
         }

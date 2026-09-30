@@ -3,15 +3,15 @@
 # One case per rule bin/lint-update implements, plus the three things
 # only the real tree can prove: that the current development pair is clean, that
 # the ALTER DEFAULT PRIVILEGES rule reproduces the historical bug it was written
-# for. Kept
-# deliberately small -- a checker whose test suite dwarfs it has stopped being
+# for, and that the @generated@ marker inside a function body causes no false
+# positive. Kept deliberately small -- a checker whose test suite dwarfs it has stopped being
 # the cheap option. Run from the repo root:
 #
 #     prove bin/test/textfirst.t
 
 use strict;
 use warnings;
-use Test::More tests => 38;
+use Test::More tests => 42;
 use File::Temp qw(tempdir);
 
 my $PROG = 'bin/lint-update';
@@ -92,6 +92,39 @@ SQL
     );
     is $rc, 1, 'a statement whose trailing SED comment is missing from the copy is a finding';
     like $out, qr/SED: REQUIRES 9\.3!/, '... and the finding shows the dropped comment';
+}
+
+{
+    # The newline ending a kept `--` comment must stay visible, or code moving
+    # across it compares equal.
+    my ($rc) = run_trio(
+        old    => "SELECT 1;\n",
+        new    => "SELECT 1;\nSELECT 1, -- note 2\n;\n",
+        update => "SELECT 1, -- note\n 2;\n",
+    );
+    is $rc, 1, 'code moving onto a kept -- comment line is a finding';
+}
+
+# --- the @generated@ marker -------------------------------------------------
+
+{
+    my ($rc, $out) = run_trio(
+        old    => "/* see \@generated\@ */\nSELECT 1;\n",
+        new    => "/* see \@generated\@ */\nSELECT 1;\nCREATE TABLE t(a int);\n",
+        update => '',
+    );
+    is $rc, 2, 'text after @generated@ other than the VERSIONED tag is an error, not a silent OK';
+    like $out, qr/:1: text after \@generated\@/, '... naming the line';
+}
+
+{
+    my $body = "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS \$b\$\n  SELECT 1; -- \@generated\@%s\n\$b\$;\n";
+    my ($rc) = run_trio(
+        old    => sprintf($body, ' VERSIONED FILE!'),
+        new    => sprintf($body, ''),
+        update => '',
+    );
+    is $rc, 0, '@generated@ and @generated@ VERSIONED FILE! inside a dollar-quoted body compare equal';
 }
 
 # --- rule 4: substring against the whole update file ------------------------
